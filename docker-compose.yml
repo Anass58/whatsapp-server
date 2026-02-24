@@ -1,0 +1,9 @@
+version: '3.8'
+services:
+  whatsapp-server:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./auth_info_baileys:/app/auth_info_baileys
+    restart: unless-stopped
