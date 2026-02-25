@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestWaWebVersion } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const { Server } = require('socket.io');
@@ -27,8 +27,17 @@ async function connectToWhatsApp(phone, socketId = null) {
     // Use a specific folder for each phone number
     const sessionDir = `auth_info_baileys_${phone}`;
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+    // Fetch the latest WhatsApp Web version to avoid Connection Terminated errors
+    let version;
+    try {
+        const versionInfo = await fetchLatestWaWebVersion({});
+        version = versionInfo.version;
+        console.log(`Using WhatsApp Web version: ${version}`);
+    } catch (e) {
+        console.log('Could not fetch latest WA version, using default:', e.message);
+    }
 
-    const sock = makeWASocket({
+    const sockOptions = {
         auth: state,
         printQRInTerminal: true,
         logger: pino({ level: "info" }),
@@ -37,7 +46,10 @@ async function connectToWhatsApp(phone, socketId = null) {
         defaultQueryTimeoutMs: 60000,
         retryRequestDelayMs: 500,
         markOnlineOnConnect: false
-    });
+    };
+    if (version) sockOptions.version = version;
+
+    const sock = makeWASocket(sockOptions);
 
     // Store session info
     sessions.set(phone, {
