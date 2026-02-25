@@ -31,7 +31,7 @@ async function connectToWhatsApp(phone, socketId = null) {
     const sock = makeWASocket({
         auth: state,
         printQRInTerminal: true,
-        logger: pino({ level: "silent" }),
+        logger: pino({ level: "warn" }),
         browser: ["Domira CRM", "Chrome", "120.0.0"],
         connectTimeoutMs: 60000,
         retryRequestDelayMs: 250
@@ -110,6 +110,57 @@ function reconnectExistingSessions() {
 reconnectExistingSessions();
 
 // API Endpoints
+
+// Diagnostic endpoint to test network connectivity from inside Docker
+app.get('/api/test-network', async (req, res) => {
+    const dns = require('dns').promises;
+    const https = require('https');
+    const results = {};
+
+    // Test 1: DNS resolution for WhatsApp servers
+    try {
+        const addresses = await dns.resolve4('web.whatsapp.com');
+        results.dns_whatsapp = { success: true, addresses };
+    } catch (e) {
+        results.dns_whatsapp = { success: false, error: e.message };
+    }
+
+    // Test 2: DNS resolution for Google (control test)
+    try {
+        const addresses = await dns.resolve4('google.com');
+        results.dns_google = { success: true, addresses };
+    } catch (e) {
+        results.dns_google = { success: false, error: e.message };
+    }
+
+    // Test 3: HTTPS connection to WhatsApp
+    try {
+        const result = await new Promise((resolve, reject) => {
+            const httpReq = https.get('https://web.whatsapp.com', { timeout: 10000 }, (httpRes) => {
+                resolve({ success: true, statusCode: httpRes.statusCode });
+            });
+            httpReq.on('error', (e) => reject(e));
+            httpReq.on('timeout', () => { httpReq.destroy(); reject(new Error('Timeout')); });
+        });
+        results.https_whatsapp = result;
+    } catch (e) {
+        results.https_whatsapp = { success: false, error: e.message };
+    }
+
+    // Test 4: Check what Baileys version is installed
+    try {
+        const pkg = require('@whiskeysockets/baileys/package.json');
+        results.baileys_version = pkg.version;
+    } catch (e) {
+        results.baileys_version = 'unknown';
+    }
+
+    results.node_version = process.version;
+    results.platform = process.platform;
+    results.arch = process.arch;
+
+    res.json(results);
+});
 
 // Start a new session or get QR for an existing unauthenticated one
 app.post('/api/start', (req, res) => {
