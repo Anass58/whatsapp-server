@@ -1,0 +1,5 @@
+node_modules
+test_ws.js
+trigger_start.js
+auth_info_baileys_*
+.git
