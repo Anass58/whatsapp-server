@@ -31,7 +31,10 @@ async function connectToWhatsApp(phone, socketId = null) {
     const sock = makeWASocket({
         auth: state,
         printQRInTerminal: true,
-        logger: pino({ level: "silent" })
+        logger: pino({ level: "silent" }),
+        browser: ["Domira CRM", "Chrome", "120.0.0"],
+        connectTimeoutMs: 60000,
+        retryRequestDelayMs: 250
     });
 
     // Store session info
