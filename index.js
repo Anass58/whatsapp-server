@@ -666,7 +666,7 @@ app.get('/api/chats', (req, res) => {
 // --- Send Text Message ---
 app.post('/api/sendText', async (req, res) => {
     try {
-        const { senderPhone, number, text } = req.body;
+        const { senderPhone, number, text, jid: rawJid } = req.body;
         if (!senderPhone) return res.status(400).json({ success: false, error: 'Sender Phone required' });
 
         const session = sessions.get(senderPhone);
@@ -674,12 +674,23 @@ app.post('/api/sendText', async (req, res) => {
             return res.status(500).json({ success: false, error: `WhatsApp not connected for ${senderPhone}` });
         }
 
-        if (!number || !text) return res.status(400).json({ success: false, error: 'Number and text required' });
+        if (!text) return res.status(400).json({ success: false, error: 'Text required' });
 
-        let jid = number.replace(/[^0-9]/g, '');
-        if (!jid.endsWith('@s.whatsapp.net')) jid = `${jid}@s.whatsapp.net`;
+        // Determine the target JID
+        let targetJid;
+        if (rawJid && rawJid.includes('@')) {
+            // Full JID provided — use directly (supports @s.whatsapp.net, @g.us, @lid)
+            targetJid = rawJid;
+        } else if (number) {
+            // Only phone number provided — create standard JID
+            const cleanNumber = number.replace(/[^0-9]/g, '');
+            targetJid = `${cleanNumber}@s.whatsapp.net`;
+        } else {
+            return res.status(400).json({ success: false, error: 'Number or JID required' });
+        }
 
-        const msg = await session.sock.sendMessage(jid, { text: text });
+        console.log(`Sending message to ${targetJid} from ${senderPhone}`);
+        const msg = await session.sock.sendMessage(targetJid, { text: text });
         res.json({ success: true, messageId: msg.key.id });
     } catch (error) {
         console.error('Error sending message:', error);
@@ -690,9 +701,9 @@ app.post('/api/sendText', async (req, res) => {
 // --- Send Media Message ---
 app.post('/api/sendMedia', upload.single('file'), async (req, res) => {
     try {
-        const { senderPhone, number, caption, mediaType } = req.body;
-        if (!senderPhone || !number || !req.file) {
-            return res.status(400).json({ success: false, error: 'senderPhone, number, and file required' });
+        const { senderPhone, number, caption, mediaType, jid: rawJid } = req.body;
+        if (!senderPhone || !req.file) {
+            return res.status(400).json({ success: false, error: 'senderPhone and file required' });
         }
 
         const session = sessions.get(senderPhone);
@@ -700,9 +711,15 @@ app.post('/api/sendMedia', upload.single('file'), async (req, res) => {
             return res.status(500).json({ success: false, error: `WhatsApp not connected for ${senderPhone}` });
         }
 
-        let jid = number.replace(/[^0-9]/g, '');
-        if (!jid.endsWith('@s.whatsapp.net') && !jid.endsWith('@g.us')) {
-            jid = `${jid}@s.whatsapp.net`;
+        // Determine the target JID
+        let jid;
+        if (rawJid && rawJid.includes('@')) {
+            jid = rawJid;
+        } else if (number) {
+            let cleanNum = number.replace(/[^0-9]/g, '');
+            jid = `${cleanNum}@s.whatsapp.net`;
+        } else {
+            return res.status(400).json({ success: false, error: 'Number or JID required' });
         }
 
         const fileBuffer = fs.readFileSync(req.file.path);
