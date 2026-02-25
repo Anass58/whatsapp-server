@@ -20,7 +20,17 @@ const io = new Server(server, {
     }
 });
 
-app.use(cors());
+// CORS - allow all origins including multipart/form-data uploads
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    credentials: false
+}));
+
+// Handle preflight OPTIONS for all routes
+app.options('*', cors());
+
 app.use(express.json());
 
 // Create media directories
