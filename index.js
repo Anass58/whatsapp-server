@@ -20,13 +20,24 @@ const io = new Server(server, {
     }
 });
 
-// CORS - allow all origins including multipart/form-data uploads
+// CORS - dual approach for maximum compatibility with reverse proxies
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+    exposedHeaders: ['Content-Length', 'Content-Type'],
+    credentials: false,
+    preflightContinue: false,
+    optionsSuccessStatus: 204
+}));
+
+// Backup manual CORS headers (in case cors package is stripped by reverse proxy)
 app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
     if (req.method === 'OPTIONS') {
-        return res.sendStatus(200);
+        return res.status(204).end();
     }
     next();
 });
