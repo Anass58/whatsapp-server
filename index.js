@@ -5,6 +5,7 @@ const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const { Server } = require('socket.io');
 const http = require('http');
+const { SocksProxyAgent } = require('socks-proxy-agent');
 
 const app = express();
 const server = http.createServer(app);
@@ -37,6 +38,11 @@ async function connectToWhatsApp(phone, socketId = null) {
         console.log('Could not fetch latest WA version, using default:', e.message);
     }
 
+    // Create SOCKS5 proxy agent to route through Cloudflare WARP VPN
+    const proxyUrl = process.env.WARP_PROXY || 'socks5h://127.0.0.1:40000';
+    console.log(`Using SOCKS5 proxy: ${proxyUrl}`);
+    const agent = new SocksProxyAgent(proxyUrl);
+
     const sockOptions = {
         auth: state,
         printQRInTerminal: true,
@@ -45,7 +51,8 @@ async function connectToWhatsApp(phone, socketId = null) {
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
         retryRequestDelayMs: 500,
-        markOnlineOnConnect: false
+        markOnlineOnConnect: false,
+        agent: agent
     };
     if (version) sockOptions.version = version;
 
