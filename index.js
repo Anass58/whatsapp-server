@@ -752,6 +752,73 @@ app.post('/api/disconnect', async (req, res) => {
 });
 
 // ============================================
+// Chat Sync Functions  
+// ============================================
+
+function syncChats(phone) {
+    const session = sessions.get(phone);
+    if (!session || !session.isConnected || !session.sock) return;
+
+    // Delay to allow Baileys to populate chats from store
+    setTimeout(async () => {
+        try {
+            const sock = session.sock;
+
+            // Try to fetch groups
+            try {
+                const groups = await sock.groupFetchAllParticipating();
+                if (groups) {
+                    for (const [jid, group] of Object.entries(groups)) {
+                        const existing = session.chats.get(jid) || {};
+                        session.chats.set(jid, {
+                            ...existing,
+                            id: jid,
+                            name: group.subject || existing.name,
+                            contactName: group.subject || existing.contactName,
+                            isGroup: true
+                        });
+                    }
+                }
+            } catch (e) {
+                console.log('Could not fetch groups:', e.message);
+            }
+
+            console.log(`syncChats: ${session.chats.size} chats for ${phone}`);
+            emitChatList(phone);
+        } catch (e) {
+            console.error('syncChats error:', e.message);
+        }
+    }, 3000);
+}
+
+function emitChatList(phone) {
+    const session = sessions.get(phone);
+    if (!session) return;
+
+    const chatList = [];
+    session.chats.forEach((chat, jid) => {
+        if (jid === 'status@broadcast' || !jid.includes('@')) return;
+
+        const chatPhone = jid.split('@')[0];
+        const isGroup = jid.endsWith('@g.us');
+
+        chatList.push({
+            jid: jid,
+            phone: chatPhone,
+            name: chat.contactName || chat.name || chat.notify || chat.subject || chatPhone,
+            isGroup: isGroup,
+            lastMessage: chat.lastMessage || '',
+            lastMessageTime: chat.lastMessageTime || (chat.conversationTimestamp ? chat.conversationTimestamp * 1000 : 0),
+            unreadCount: chat.unreadCount || 0
+        });
+    });
+
+    chatList.sort((a, b) => (b.lastMessageTime || 0) - (a.lastMessageTime || 0));
+    console.log(`Emitting ${chatList.length} chats for ${phone}`);
+    io.emit('chats_sync', { phone: phone, chats: chatList });
+}
+
+// ============================================
 // Socket.IO
 // ============================================
 
