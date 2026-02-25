@@ -518,10 +518,26 @@ app.get('/api/status', (req, res) => {
 
     if (phone) {
         const session = sessions.get(phone);
-        if (!session) return res.json({ connected: false, qr: null, exists: false, error: null });
+
+        // Check if auth folder exists (session data on disk)
+        const authDir = path.join(__dirname, `auth_info_baileys_${phone}`);
+        const authExists = fs.existsSync(authDir);
+
+        if (!session) {
+            if (authExists) {
+                // Session exists on disk but not in memory — auto-reconnect
+                console.log(`Auto-reconnecting from /api/status for ${phone}`);
+                connectToWhatsApp(phone);
+                return res.json({ connected: false, exists: true, needsScan: false, qr: null, error: null });
+            }
+            // No session at all — needs QR scan
+            return res.json({ connected: false, exists: false, needsScan: true, qr: null, error: null });
+        }
+
         return res.json({
             exists: true,
             connected: session.isConnected,
+            needsScan: false,
             qr: session.isConnected ? null : session.qrCodeData,
             error: session.lastError
         });
