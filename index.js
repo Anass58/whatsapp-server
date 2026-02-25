@@ -38,7 +38,8 @@ async function connectToWhatsApp(phone, socketId = null) {
     sessions.set(phone, {
         sock: sock,
         qrCodeData: '',
-        isConnected: false
+        isConnected: false,
+        lastError: null
     });
 
     sock.ev.on('connection.update', (update) => {
@@ -55,10 +56,11 @@ async function connectToWhatsApp(phone, socketId = null) {
 
         if (connection === 'close') {
             session.isConnected = false;
-            io.emit('connection_status', { phone: phone, status: 'disconnected' });
+            session.lastError = lastDisconnect.error?.message || lastDisconnect.error?.output?.statusCode || 'Unknown error';
+            io.emit('connection_status', { phone: phone, status: 'disconnected', error: session.lastError });
 
             const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log(`connection closed for ${phone} due to `, lastDisconnect.error, ', reconnecting ', shouldReconnect);
+            console.log(`connection closed for ${phone} due to `, session.lastError, ', reconnecting ', shouldReconnect);
 
             if (shouldReconnect) {
                 // Wait a bit before reconnecting
@@ -73,6 +75,7 @@ async function connectToWhatsApp(phone, socketId = null) {
             console.log(`opened connection for ${phone}`);
             session.isConnected = true;
             session.qrCodeData = '';
+            session.lastError = null;
             io.emit('connection_status', { phone: phone, status: 'connected' });
         }
     });
@@ -136,11 +139,12 @@ app.get('/api/status', (req, res) => {
 
     if (phone) {
         const session = sessions.get(phone);
-        if (!session) return res.json({ connected: false, qr: null, exists: false });
+        if (!session) return res.json({ connected: false, qr: null, exists: false, error: null });
         return res.json({
             exists: true,
             connected: session.isConnected,
-            qr: session.isConnected ? null : session.qrCodeData
+            qr: session.isConnected ? null : session.qrCodeData,
+            error: session.lastError
         });
     }
 
@@ -149,7 +153,8 @@ app.get('/api/status', (req, res) => {
     sessions.forEach((data, p) => {
         allSessions[p] = {
             connected: data.isConnected,
-            qr: data.isConnected ? null : data.qrCodeData
+            qr: data.isConnected ? null : data.qrCodeData,
+            error: data.lastError
         };
     });
     res.json(allSessions);
