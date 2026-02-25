@@ -39,7 +39,8 @@ async function connectToWhatsApp(phone, socketId = null) {
     }
 
     // Create SOCKS5 proxy agent to route through Cloudflare WARP VPN
-    const proxyUrl = process.env.WARP_PROXY || 'socks5h://127.0.0.1:40000';
+    // Use Docker gateway IP (10.0.0.1) since container runs on coolify bridge network
+    const proxyUrl = process.env.WARP_PROXY || 'socks5h://10.0.0.1:40000';
     console.log(`Using SOCKS5 proxy: ${proxyUrl}`);
     const agent = new SocksProxyAgent(proxyUrl);
 
@@ -52,7 +53,8 @@ async function connectToWhatsApp(phone, socketId = null) {
         defaultQueryTimeoutMs: 60000,
         retryRequestDelayMs: 500,
         markOnlineOnConnect: false,
-        agent: agent
+        agent: agent,
+        fetchAgent: agent
     };
     if (version) sockOptions.version = version;
 
