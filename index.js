@@ -176,6 +176,89 @@ async function connectToWhatsApp(phone, socketId = null) {
         });
     });
 
+    // --- History sync (Baileys v7 - this is how ALL chats/contacts come in) ---
+    sock.ev.on('messaging-history.set', (data) => {
+        const session = sessions.get(phone);
+        if (!session) return;
+
+        const { chats: historyChats, contacts: historyContacts, messages: historyMessages } = data;
+
+        // Process chats from history
+        if (historyChats && historyChats.length > 0) {
+            console.log(`History sync: ${historyChats.length} chats for ${phone}`);
+            historyChats.forEach(chat => {
+                if (!chat.id || chat.id === 'status@broadcast') return;
+                const existing = session.chats.get(chat.id) || {};
+                session.chats.set(chat.id, {
+                    ...existing,
+                    id: chat.id,
+                    name: chat.name || existing.name,
+                    notify: chat.notify || existing.notify,
+                    conversationTimestamp: chat.conversationTimestamp || existing.conversationTimestamp,
+                    unreadCount: chat.unreadCount || existing.unreadCount || 0
+                });
+            });
+        }
+
+        // Process contacts from history
+        if (historyContacts && historyContacts.length > 0) {
+            console.log(`History sync: ${historyContacts.length} contacts for ${phone}`);
+            historyContacts.forEach(contact => {
+                if (!contact.id) return;
+                const existing = session.chats.get(contact.id) || {};
+                session.chats.set(contact.id, {
+                    ...existing,
+                    id: contact.id,
+                    contactName: contact.name || contact.notify || existing.contactName
+                });
+            });
+        }
+
+        // Process messages from history (extract last message per chat)
+        if (historyMessages && historyMessages.length > 0) {
+            console.log(`History sync: ${historyMessages.length} messages for ${phone}`);
+            historyMessages.forEach(msg => {
+                const jid = msg.key?.remoteJid;
+                if (!jid || jid === 'status@broadcast') return;
+                const existing = session.chats.get(jid) || {};
+                const msgTime = (msg.messageTimestamp?.low || msg.messageTimestamp || 0) * 1000;
+                if (msgTime > (existing.lastMessageTime || 0)) {
+                    const content = extractMessageContent(msg);
+                    session.chats.set(jid, {
+                        ...existing,
+                        id: jid,
+                        lastMessage: content.text || `[${content.mediaType}]`,
+                        lastMessageTime: msgTime
+                    });
+                }
+            });
+        }
+
+        // Emit updated chat list
+        emitChatList(phone);
+    });
+
+    // --- Alternative chats.set event (some Baileys versions) ---
+    sock.ev.on('chats.set', (data) => {
+        const session = sessions.get(phone);
+        if (!session) return;
+        const chatArray = data.chats || data;
+        if (!Array.isArray(chatArray)) return;
+        console.log(`chats.set: ${chatArray.length} chats for ${phone}`);
+        chatArray.forEach(chat => {
+            if (!chat.id || chat.id === 'status@broadcast') return;
+            const existing = session.chats.get(chat.id) || {};
+            session.chats.set(chat.id, {
+                ...existing,
+                id: chat.id,
+                name: chat.name || existing.name,
+                conversationTimestamp: chat.conversationTimestamp || existing.conversationTimestamp,
+                unreadCount: chat.unreadCount || existing.unreadCount || 0
+            });
+        });
+        emitChatList(phone);
+    });
+
     // --- Message events ---
     sock.ev.on('messages.upsert', async (m) => {
         if (m.type !== 'notify') return;
