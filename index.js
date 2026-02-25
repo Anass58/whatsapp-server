@@ -698,6 +698,29 @@ app.post('/api/sendText', async (req, res) => {
     }
 });
 
+// --- Get Profile Picture ---
+app.get('/api/profilePic', async (req, res) => {
+    try {
+        const { phone, jid } = req.query;
+        if (!phone || !jid) return res.status(400).json({ url: null });
+
+        const session = sessions.get(phone);
+        if (!session || !session.isConnected || !session.sock) {
+            return res.json({ url: null });
+        }
+
+        try {
+            const url = await session.sock.profilePictureUrl(jid, 'image');
+            res.json({ url: url || null });
+        } catch (e) {
+            // No profile pic or not accessible
+            res.json({ url: null });
+        }
+    } catch (e) {
+        res.json({ url: null });
+    }
+});
+
 // --- Send Media Message ---
 app.post('/api/sendMedia', upload.single('file'), async (req, res) => {
     try {
