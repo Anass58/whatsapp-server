@@ -82,16 +82,20 @@ async function connectToWhatsApp(phone, socketId = null) {
 
         if (connection === 'close') {
             session.isConnected = false;
-            session.lastError = lastDisconnect.error?.message || lastDisconnect.error?.output?.statusCode || 'Unknown error';
-            io.emit('connection_status', { phone: phone, status: 'disconnected', error: session.lastError });
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            session.lastError = lastDisconnect?.error?.message || statusCode || 'Unknown error';
 
-            const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             console.log(`connection closed for ${phone} due to `, session.lastError, ', reconnecting ', shouldReconnect);
 
             if (shouldReconnect) {
+                // Emit reconnecting status so frontend shows loading, not QR
+                io.emit('connection_status', { phone: phone, status: 'reconnecting', error: session.lastError });
                 // Wait a bit before reconnecting
                 setTimeout(() => connectToWhatsApp(phone), 5000);
             } else {
+                // Logged out - need new QR scan
+                io.emit('connection_status', { phone: phone, status: 'disconnected', error: session.lastError });
                 console.log(`Logged out for ${phone}. Need to scan again.`);
                 session.qrCodeData = '';
                 io.emit('qr_update', { phone: phone, qr: '' });
