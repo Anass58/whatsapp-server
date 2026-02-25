@@ -263,10 +263,23 @@ async function connectToWhatsApp(phone, socketId = null) {
 // ============================================
 
 function extractMessageContent(msg) {
-    const m = msg.message;
+    let m = msg.message;
     if (!m) return { text: '', mediaType: 'text', mediaMime: null, mediaFilename: null };
 
-    // Text
+    // Baileys v7: unwrap nested message wrappers
+    // These wrappers contain the real message inside .message
+    if (m.ephemeralMessage) m = m.ephemeralMessage.message;
+    if (m.viewOnceMessage) m = m.viewOnceMessage.message;
+    if (m.viewOnceMessageV2) m = m.viewOnceMessageV2.message;
+    if (m.documentWithCaptionMessage) m = m.documentWithCaptionMessage.message;
+    if (m.editedMessage) m = m.editedMessage.message;
+    if (m.templateMessage?.hydratedTemplate) m = m.templateMessage.hydratedTemplate;
+    if (m.buttonsMessage) m = { conversation: m.buttonsMessage.contentText || '' };
+    if (m.listMessage) m = { conversation: m.listMessage.description || m.listMessage.title || '' };
+
+    if (!m) return { text: '', mediaType: 'text', mediaMime: null, mediaFilename: null };
+
+    // Text messages
     if (m.conversation) return { text: m.conversation, mediaType: 'text', mediaMime: null, mediaFilename: null };
     if (m.extendedTextMessage?.text) return { text: m.extendedTextMessage.text, mediaType: 'text', mediaMime: null, mediaFilename: null };
 
@@ -320,13 +333,30 @@ function extractMessageContent(msg) {
 
     // Contact
     if (m.contactMessage) return {
-        text: `👤 ${m.contactMessage.displayName || 'جهة اتصال'}`,
+        text: m.contactMessage.displayName || 'جهة اتصال',
         mediaType: 'contact',
         mediaMime: null,
         mediaFilename: null
     };
 
-    return { text: '[رسالة غير مدعومة]', mediaType: 'text', mediaMime: null, mediaFilename: null };
+    // Contact array
+    if (m.contactsArrayMessage) return {
+        text: m.contactsArrayMessage.displayName || 'جهات اتصال',
+        mediaType: 'contact',
+        mediaMime: null,
+        mediaFilename: null
+    };
+
+    // Protocol message (ignore)
+    if (m.protocolMessage || m.reactionMessage || m.pollCreationMessage || m.pollUpdateMessage) {
+        return { text: '', mediaType: 'text', mediaMime: null, mediaFilename: null };
+    }
+
+    // Log unknown message types for debugging
+    const keys = Object.keys(m).filter(k => !['messageContextInfo', 'senderKeyDistributionMessage'].includes(k));
+    console.log('Unknown message type. Keys:', keys, 'Full:', JSON.stringify(m).substring(0, 300));
+
+    return { text: '', mediaType: 'text', mediaMime: null, mediaFilename: null };
 }
 
 async function downloadAndSaveMedia(msg, phone) {
