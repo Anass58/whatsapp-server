@@ -618,6 +618,74 @@ app.post('/api/sendMedia', upload.single('file'), async (req, res) => {
     }
 });
 
+// --- Get All Contacts with Names ---
+app.get('/api/contacts', async (req, res) => {
+    const { phone } = req.query;
+    if (!phone) return res.status(400).json({ error: 'Phone required' });
+
+    const session = sessions.get(phone);
+    if (!session || !session.isConnected) {
+        return res.json({ contacts: [], error: 'Not connected' });
+    }
+
+    const contacts = [];
+    session.chats.forEach((chat, jid) => {
+        if (jid === 'status@broadcast' || !jid.includes('@')) return;
+
+        const chatPhone = jid.split('@')[0];
+        const isGroup = jid.endsWith('@g.us');
+        const name = chat.contactName || chat.name || chat.notify || chat.subject || chatPhone;
+
+        contacts.push({
+            jid: jid,
+            phone: chatPhone,
+            name: name,
+            isGroup: isGroup,
+            conversationTimestamp: chat.conversationTimestamp || chat.lastMessageTime || 0
+        });
+    });
+
+    // Sort by name
+    contacts.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    res.json({ contacts: contacts, total: contacts.length });
+});
+
+// --- Force Sync All Contacts ---
+app.post('/api/syncContacts', async (req, res) => {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ error: 'Phone required' });
+
+    const session = sessions.get(phone);
+    if (!session || !session.isConnected || !session.sock) {
+        return res.json({ success: false, error: 'Not connected' });
+    }
+
+    try {
+        // Force contacts refresh from WhatsApp
+        const store = session.sock.store;
+
+        // Re-emit current chat list to force frontend sync
+        emitChatList(phone);
+
+        const contacts = [];
+        session.chats.forEach((chat, jid) => {
+            if (jid === 'status@broadcast' || !jid.includes('@')) return;
+            const chatPhone = jid.split('@')[0];
+            contacts.push({
+                jid: jid,
+                phone: chatPhone,
+                name: chat.contactName || chat.name || chat.notify || chat.subject || chatPhone,
+                isGroup: jid.endsWith('@g.us')
+            });
+        });
+
+        res.json({ success: true, contacts: contacts, total: contacts.length });
+    } catch (e) {
+        console.error('Sync contacts error:', e);
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // --- Disconnect Session ---
 app.post('/api/disconnect', async (req, res) => {
     const { phone } = req.body;
