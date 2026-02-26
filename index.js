@@ -1002,6 +1002,66 @@ io.on('connection', (socket) => {
             }
         }
     });
+
+    // --- Send Media via Socket.IO (bypasses CORS/Traefik issues) ---
+    socket.on('send_media', async (data, callback) => {
+        try {
+            const { senderPhone, jid, number, mediaType, caption, fileName, fileMime, fileBase64 } = data;
+            if (!senderPhone || !fileBase64) {
+                return callback({ success: false, error: 'Missing required fields' });
+            }
+
+            const session = sessions.get(senderPhone);
+            if (!session || !session.isConnected || !session.sock) {
+                return callback({ success: false, error: `WhatsApp not connected for ${senderPhone}` });
+            }
+
+            // Determine target JID
+            let targetJid;
+            if (jid && jid.includes('@')) {
+                targetJid = jid;
+            } else if (number) {
+                const cleanNum = number.replace(/[^0-9]/g, '');
+                targetJid = `${cleanNum}@s.whatsapp.net`;
+            } else {
+                return callback({ success: false, error: 'Number or JID required' });
+            }
+
+            // Decode base64 to buffer
+            const fileBuffer = Buffer.from(fileBase64, 'base64');
+            const mime = fileMime || 'application/octet-stream';
+
+            // Build Baileys send payload
+            let sendPayload = {};
+            if (mediaType === 'image' || mime.startsWith('image/')) {
+                sendPayload = { image: fileBuffer, caption: caption || '' };
+            } else if (mediaType === 'video' || mime.startsWith('video/')) {
+                sendPayload = { video: fileBuffer, caption: caption || '' };
+            } else if (mediaType === 'audio' || mediaType === 'voice' || mime.startsWith('audio/')) {
+                sendPayload = { audio: fileBuffer, mimetype: mime, ptt: mediaType === 'voice' };
+            } else {
+                sendPayload = { document: fileBuffer, mimetype: mime, fileName: fileName || 'file', caption: caption || '' };
+            }
+
+            console.log(`Socket: sending ${mediaType} to ${targetJid} from ${senderPhone}`);
+            const msg = await session.sock.sendMessage(targetJid, sendPayload);
+
+            // Save to media dir
+            const ext = path.extname(fileName || '.bin') || '.bin';
+            const savedFilename = `${senderPhone}_${msg.key.id}${ext}`;
+            const savedPath = path.join(MEDIA_DIR, savedFilename);
+            fs.writeFileSync(savedPath, fileBuffer);
+
+            callback({
+                success: true,
+                messageId: msg.key.id,
+                mediaUrl: `/media/${savedFilename}`
+            });
+        } catch (error) {
+            console.error('Socket send_media error:', error.message);
+            callback({ success: false, error: error.message });
+        }
+    });
 });
 
 // ============================================
