@@ -360,6 +360,23 @@ async function connectToWhatsApp(phone, socketId = null) {
             }
         }
     });
+
+    // --- Message Deletions ---
+    sock.ev.on('messages.delete', (item) => {
+        if ('all' in item) {
+            io.emit('message_deleted', { phone: phone, jid: item.jid, all: true });
+        } else if ('keys' in item) {
+            for (const key of item.keys) {
+                io.emit('message_deleted', { phone: phone, jid: key.remoteJid, messageId: key.id });
+            }
+        }
+    });
+
+    // --- Presence Updates (typing/recording) ---
+    sock.ev.on('presence.update', (data) => {
+        if (!data.id) return;
+        io.emit('presence_update', { phone: phone, jid: data.id, presences: data.presences });
+    });
 }
 
 // ============================================
@@ -687,7 +704,7 @@ app.get('/api/chats', (req, res) => {
 // --- Send Text Message ---
 app.post('/api/sendText', async (req, res) => {
     try {
-        const { senderPhone, number, text, jid: rawJid } = req.body;
+        const { senderPhone, number, text, jid: rawJid, quotedMessageId, quotedFromMe } = req.body;
         if (!senderPhone) return res.status(400).json({ success: false, error: 'Sender Phone required' });
 
         const session = sessions.get(senderPhone);
@@ -710,8 +727,16 @@ app.post('/api/sendText', async (req, res) => {
             return res.status(400).json({ success: false, error: 'Number or JID required' });
         }
 
+        let sendOptions = {};
+        if (quotedMessageId) {
+            sendOptions.quoted = {
+                key: { id: quotedMessageId, remoteJid: targetJid, fromMe: quotedFromMe || false },
+                message: { conversation: '' }
+            };
+        }
+
         console.log(`Sending message to ${targetJid} from ${senderPhone}`);
-        const msg = await session.sock.sendMessage(targetJid, { text: text });
+        const msg = await session.sock.sendMessage(targetJid, { text: text }, sendOptions);
         res.json({ success: true, messageId: msg.key.id });
     } catch (error) {
         console.error('Error sending message:', error);
@@ -745,7 +770,7 @@ app.get('/api/profilePic', async (req, res) => {
 // --- Send Media Message ---
 app.post('/api/sendMedia', upload.single('file'), async (req, res) => {
     try {
-        const { senderPhone, number, caption, mediaType, jid: rawJid } = req.body;
+        const { senderPhone, number, caption, mediaType, jid: rawJid, quotedMessageId, quotedFromMe } = req.body;
         if (!senderPhone || !req.file) {
             return res.status(400).json({ success: false, error: 'senderPhone and file required' });
         }
@@ -785,7 +810,15 @@ app.post('/api/sendMedia', upload.single('file'), async (req, res) => {
             };
         }
 
-        const msg = await session.sock.sendMessage(jid, sendPayload);
+        let sendOptions = {};
+        if (quotedMessageId) {
+            sendOptions.quoted = {
+                key: { id: quotedMessageId, remoteJid: jid, fromMe: quotedFromMe || false },
+                message: { conversation: '' }
+            };
+        }
+
+        const msg = await session.sock.sendMessage(jid, sendPayload, sendOptions);
 
         // Save sent media to media dir
         const ext = path.extname(req.file.originalname) || '.bin';
@@ -893,6 +926,152 @@ app.post('/api/disconnect', async (req, res) => {
     }
 
     res.json({ success: true });
+});
+
+// ============================================
+// Extra WhatsApp Features
+// ============================================
+
+// --- Delete Message ---
+app.post('/api/deleteMessage', async (req, res) => {
+    try {
+        const { phone, jid, messageId, fromMe } = req.body;
+        if (!phone || !jid || !messageId) return res.status(400).json({ success: false, error: 'Missing parameters' });
+
+        const session = sessions.get(phone);
+        if (!session || !session.isConnected || !session.sock) return res.status(500).json({ success: false, error: 'Not connected' });
+
+        await session.sock.sendMessage(jid, {
+            delete: {
+                remoteJid: jid,
+                fromMe: fromMe !== false,
+                id: messageId,
+                participant: fromMe === false ? jid : undefined
+            }
+        });
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// --- React to Message ---
+app.post('/api/react', async (req, res) => {
+    try {
+        const { phone, jid, messageId, emoji } = req.body;
+        if (!phone || !jid || !messageId || !emoji) return res.status(400).json({ success: false, error: 'Missing parameters' });
+
+        const session = sessions.get(phone);
+        if (!session || !session.isConnected || !session.sock) return res.status(500).json({ success: false, error: 'Not connected' });
+
+        await session.sock.sendMessage(jid, {
+            react: {
+                text: emoji,
+                key: { remoteJid: jid, id: messageId, fromMe: false }
+            }
+        });
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// --- Group Management: Create ---
+app.post('/api/groups/create', async (req, res) => {
+    try {
+        const { phone, subject, participants } = req.body; // participants: array of JIDs
+        if (!phone || !subject || !participants || !Array.isArray(participants)) return res.status(400).json({ success: false, error: 'Missing parameters' });
+
+        const session = sessions.get(phone);
+        if (!session || !session.isConnected || !session.sock) return res.status(500).json({ success: false, error: 'Not connected' });
+
+        const group = await session.sock.groupCreate(subject, participants);
+        res.json({ success: true, group });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// --- Group Management: Update Participants ---
+app.post('/api/groups/participants', async (req, res) => {
+    try {
+        const { phone, groupId, participants, action } = req.body; // action: 'add', 'remove', 'promote', 'demote'
+        if (!phone || !groupId || !participants || !action) return res.status(400).json({ success: false, error: 'Missing parameters' });
+
+        const session = sessions.get(phone);
+        if (!session || !session.isConnected || !session.sock) return res.status(500).json({ success: false, error: 'Not connected' });
+
+        const responses = await session.sock.groupParticipantsUpdate(groupId, participants, action);
+        res.json({ success: true, responses });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// --- Group Management: Leave ---
+app.post('/api/groups/leave', async (req, res) => {
+    try {
+        const { phone, groupId } = req.body;
+        if (!phone || !groupId) return res.status(400).json({ success: false, error: 'Missing parameters' });
+
+        const session = sessions.get(phone);
+        if (!session || !session.isConnected || !session.sock) return res.status(500).json({ success: false, error: 'Not connected' });
+
+        await session.sock.groupLeave(groupId);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// --- Group Management: Update Group Info ---
+app.post('/api/groups/update', async (req, res) => {
+    try {
+        const { phone, groupId, subject, description } = req.body;
+        if (!phone || !groupId) return res.status(400).json({ success: false, error: 'Missing parameters' });
+
+        const session = sessions.get(phone);
+        if (!session || !session.isConnected || !session.sock) return res.status(500).json({ success: false, error: 'Not connected' });
+
+        if (subject) await session.sock.groupUpdateSubject(groupId, subject);
+        if (description) await session.sock.groupUpdateDescription(groupId, description);
+
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// --- Send Presence (Typing/Recording) ---
+app.post('/api/presence', async (req, res) => {
+    try {
+        const { phone, jid, presence } = req.body; // presence: 'composing', 'paused', 'recording'
+        if (!phone || !jid || !presence) return res.status(400).json({ success: false, error: 'Missing parameters' });
+
+        const session = sessions.get(phone);
+        if (!session || !session.isConnected || !session.sock) return res.status(500).json({ success: false, error: 'Not connected' });
+
+        await session.sock.sendPresenceUpdate(presence, jid);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// --- Block/Unblock ---
+app.post('/api/block', async (req, res) => {
+    try {
+        const { phone, jid, action } = req.body; // action: 'block', 'unblock'
+        if (!phone || !jid || !action) return res.status(400).json({ success: false, error: 'Missing parameters' });
+
+        const session = sessions.get(phone);
+        if (!session || !session.isConnected || !session.sock) return res.status(500).json({ success: false, error: 'Not connected' });
+
+        await session.sock.updateBlockStatus(jid, action);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
 });
 
 // ============================================
@@ -1006,7 +1185,7 @@ io.on('connection', (socket) => {
     // --- Send Media via Socket.IO (bypasses CORS/Traefik issues) ---
     socket.on('send_media', async (data, callback) => {
         try {
-            const { senderPhone, jid, number, mediaType, caption, fileName, fileMime, fileBase64 } = data;
+            const { senderPhone, jid, number, mediaType, caption, fileName, fileMime, fileBase64, quotedMessageId, quotedFromMe } = data;
             if (!senderPhone || !fileBase64) {
                 return callback({ success: false, error: 'Missing required fields' });
             }
@@ -1043,8 +1222,16 @@ io.on('connection', (socket) => {
                 sendPayload = { document: fileBuffer, mimetype: mime, fileName: fileName || 'file', caption: caption || '' };
             }
 
+            let sendOptions = {};
+            if (quotedMessageId) {
+                sendOptions.quoted = {
+                    key: { id: quotedMessageId, remoteJid: targetJid, fromMe: quotedFromMe || false },
+                    message: { conversation: '' }
+                };
+            }
+
             console.log(`Socket: sending ${mediaType} to ${targetJid} from ${senderPhone}`);
-            const msg = await session.sock.sendMessage(targetJid, sendPayload);
+            const msg = await session.sock.sendMessage(targetJid, sendPayload, sendOptions);
 
             // Save to media dir
             const ext = path.extname(fileName || '.bin') || '.bin';
