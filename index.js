@@ -130,6 +130,12 @@ async function connectToWhatsApp(phone, socketId = null) {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             session.lastError = lastDisconnect?.error?.message || statusCode || 'Unknown error';
 
+            // If intentionally logging out, don't reconnect
+            if (session._isLoggingOut) {
+                console.log(`Skipping reconnect for ${phone} — intentional logout`);
+                return;
+            }
+
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             console.log(`connection closed for ${phone} due to`, session.lastError, ', reconnecting', shouldReconnect);
 
@@ -137,17 +143,23 @@ async function connectToWhatsApp(phone, socketId = null) {
                 io.emit('connection_status', { phone: phone, status: 'reconnecting', error: session.lastError });
                 setTimeout(() => connectToWhatsApp(phone), 3000);
             } else {
-                // Logged out — keep auth files on disk so user doesn't need to scan QR again
-                // Just clear the in-memory session. Next time /api/start is called, it will auto-restore.
-                io.emit('connection_status', { phone: phone, status: 'disconnected', error: 'logged_out' });
-                console.log(`Logged out for ${phone}. Auth files kept on disk for re-login.`);
+                // Logged out — fully clean up the session
+                io.emit('connection_status', { phone: phone, status: 'logged_out' });
+                console.log(`Logged out for ${phone}. Cleaning up session.`);
                 session.qrCodeData = '';
                 session.isConnected = false;
-                // Try to reconnect automatically after a delay
-                setTimeout(() => {
-                    console.log(`Auto-reconnecting after logout for ${phone}`);
-                    connectToWhatsApp(phone);
-                }, 5000);
+                // Delete auth files so next connection starts fresh
+                const authDir = path.join(__dirname, `auth_info_baileys_${phone}`);
+                if (fs.existsSync(authDir)) {
+                    try {
+                        fs.rmSync(authDir, { recursive: true, force: true });
+                        console.log(`Deleted auth files for ${phone} after logout`);
+                    } catch (e) {
+                        console.error(`Failed to delete auth dir:`, e.message);
+                    }
+                }
+                sessions.delete(phone);
+                // Do NOT auto-reconnect after logout
             }
         } else if (connection === 'open') {
             console.log(`opened connection for ${phone}`);
@@ -721,26 +733,38 @@ app.post('/api/logout', async (req, res) => {
     const { phone } = req.body;
     if (!phone) return res.status(400).json({ success: false, error: 'Phone required' });
 
-    const session = sessions.get(phone);
-    if (session && session.sock) {
-        try { await session.sock.logout(); } catch (e) { /* ignore */ }
-        try { session.sock.end(undefined); } catch (e) { /* ignore */ }
-    }
-    sessions.delete(phone);
+    // Also logout ALL sessions if only one exists (handle case where user enters different phone)
+    const phonesToLogout = [phone];
+    // Find any other active sessions and add them
+    sessions.forEach((data, p) => {
+        if (!phonesToLogout.includes(p)) phonesToLogout.push(p);
+    });
 
-    // Delete auth files from disk
-    const authDir = path.join(__dirname, `auth_info_baileys_${phone}`);
-    if (fs.existsSync(authDir)) {
-        try {
-            fs.rmSync(authDir, { recursive: true, force: true });
-            console.log(`Deleted auth files for ${phone}`);
-        } catch (e) {
-            console.error(`Failed to delete auth dir for ${phone}:`, e.message);
+    for (const p of phonesToLogout) {
+        const session = sessions.get(p);
+        if (session) {
+            // Mark as logging out to prevent auto-reconnect
+            session._isLoggingOut = true;
+            if (session.sock) {
+                try { session.sock.end(undefined); } catch (e) { /* ignore */ }
+            }
+            sessions.delete(p);
         }
+
+        // Delete auth files from disk
+        const authDir = path.join(__dirname, `auth_info_baileys_${p}`);
+        if (fs.existsSync(authDir)) {
+            try {
+                fs.rmSync(authDir, { recursive: true, force: true });
+                console.log(`Deleted auth files for ${p}`);
+            } catch (e) {
+                console.error(`Failed to delete auth dir for ${p}:`, e.message);
+            }
+        }
+        console.log(`Logged out ${p} — session fully deleted`);
     }
 
     io.emit('connection_status', { phone, status: 'logged_out' });
-    console.log(`Logged out ${phone} — session fully deleted`);
     res.json({ success: true });
 });
 
