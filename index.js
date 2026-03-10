@@ -135,13 +135,19 @@ async function connectToWhatsApp(phone, socketId = null) {
 
             if (shouldReconnect) {
                 io.emit('connection_status', { phone: phone, status: 'reconnecting', error: session.lastError });
-                setTimeout(() => connectToWhatsApp(phone), 5000);
+                setTimeout(() => connectToWhatsApp(phone), 3000);
             } else {
-                io.emit('connection_status', { phone: phone, status: 'disconnected', error: session.lastError });
-                console.log(`Logged out for ${phone}. Need to scan again.`);
+                // Logged out — keep auth files on disk so user doesn't need to scan QR again
+                // Just clear the in-memory session. Next time /api/start is called, it will auto-restore.
+                io.emit('connection_status', { phone: phone, status: 'disconnected', error: 'logged_out' });
+                console.log(`Logged out for ${phone}. Auth files kept on disk for re-login.`);
                 session.qrCodeData = '';
-                io.emit('qr_update', { phone: phone, qr: '' });
-                sessions.delete(phone);
+                session.isConnected = false;
+                // Try to reconnect automatically after a delay
+                setTimeout(() => {
+                    console.log(`Auto-reconnecting after logout for ${phone}`);
+                    connectToWhatsApp(phone);
+                }, 5000);
             }
         } else if (connection === 'open') {
             console.log(`opened connection for ${phone}`);
@@ -290,6 +296,20 @@ async function connectToWhatsApp(phone, socketId = null) {
             const remoteJid = msg.key.remoteJid;
             if (!remoteJid || remoteJid === 'status@broadcast') continue;
 
+            // Handle reaction messages separately
+            const rawMsg = msg.message;
+            if (rawMsg?.reactionMessage) {
+                io.emit('reaction_update', {
+                    phone: phone,
+                    remoteJid: remoteJid,
+                    targetMessageId: rawMsg.reactionMessage.key?.id,
+                    emoji: rawMsg.reactionMessage.text || '',
+                    fromMe: msg.key.fromMe,
+                    participant: msg.key.participant || remoteJid
+                });
+                continue;
+            }
+
             const isGroup = remoteJid.endsWith('@g.us');
             const chatPhone = remoteJid.split('@')[0];
             const isFromMe = msg.key.fromMe;
@@ -310,6 +330,9 @@ async function connectToWhatsApp(phone, socketId = null) {
             // Get contact name
             const contactName = getContactName(session, remoteJid, msg);
 
+            // Extract quoted message info
+            const quotedInfo = extractQuotedInfo(msg);
+
             // Emit to frontend
             const messageData = {
                 phone: phone,
@@ -325,7 +348,8 @@ async function connectToWhatsApp(phone, socketId = null) {
                 mediaMime: msgContent.mediaMime,
                 mediaFilename: msgContent.mediaFilename,
                 timestamp: (msg.messageTimestamp?.low || msg.messageTimestamp || Math.floor(Date.now() / 1000)) * 1000,
-                pushName: msg.pushName || null
+                pushName: msg.pushName || null,
+                quotedMessage: quotedInfo
             };
 
             io.emit('new_message', messageData);
@@ -382,6 +406,47 @@ async function connectToWhatsApp(phone, socketId = null) {
 // ============================================
 // Helper Functions
 // ============================================
+
+function extractQuotedInfo(msg) {
+    try {
+        let m = msg.message;
+        if (!m) return null;
+        if (m.ephemeralMessage) m = m.ephemeralMessage.message;
+        if (m.viewOnceMessage) m = m.viewOnceMessage.message;
+        if (m.viewOnceMessageV2) m = m.viewOnceMessageV2.message;
+
+        // Find contextInfo in any message type
+        const types = ['extendedTextMessage', 'imageMessage', 'videoMessage', 'audioMessage', 'documentMessage', 'stickerMessage'];
+        let ctx = null;
+        for (const t of types) {
+            if (m[t]?.contextInfo?.quotedMessage) {
+                ctx = m[t].contextInfo;
+                break;
+            }
+        }
+        if (!ctx) return null;
+
+        const qm = ctx.quotedMessage;
+        let quotedText = '';
+        if (qm.conversation) quotedText = qm.conversation;
+        else if (qm.extendedTextMessage?.text) quotedText = qm.extendedTextMessage.text;
+        else if (qm.imageMessage?.caption) quotedText = qm.imageMessage.caption || '📷 صورة';
+        else if (qm.videoMessage?.caption) quotedText = qm.videoMessage.caption || '🎬 فيديو';
+        else if (qm.audioMessage) quotedText = '🎤 رسالة صوتية';
+        else if (qm.documentMessage) quotedText = `📄 ${qm.documentMessage.fileName || 'مستند'}`;
+        else if (qm.imageMessage) quotedText = '📷 صورة';
+        else if (qm.videoMessage) quotedText = '🎬 فيديو';
+        else if (qm.stickerMessage) quotedText = '🏷️ ملصق';
+
+        return {
+            messageId: ctx.stanzaId,
+            participant: ctx.participant || null,
+            text: quotedText
+        };
+    } catch (e) {
+        return null;
+    }
+}
 
 function extractMessageContent(msg) {
     let m = msg.message;
@@ -631,6 +696,52 @@ app.post('/api/start', (req, res) => {
     console.log(`Starting new WhatsApp session for ${formattedPhone}`);
     connectToWhatsApp(formattedPhone);
     res.json({ success: true, status: 'initializing' });
+});
+
+// --- Disconnect Session (keeps auth on disk) ---
+app.post('/api/disconnect', (req, res) => {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ success: false, error: 'Phone required' });
+
+    const session = sessions.get(phone);
+    if (session && session.sock) {
+        try { session.sock.end(undefined); } catch (e) { /* ignore */ }
+        session.isConnected = false;
+        session.qrCodeData = '';
+    }
+    // Keep auth files — don't delete auth_info_baileys_*
+    // Keep the session in memory so it can auto-reconnect
+    console.log(`Disconnected ${phone} (auth files preserved)`);
+    io.emit('connection_status', { phone, status: 'disconnected' });
+    res.json({ success: true });
+});
+
+// --- Logout Session (deletes auth files — forces new QR scan) ---
+app.post('/api/logout', async (req, res) => {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ success: false, error: 'Phone required' });
+
+    const session = sessions.get(phone);
+    if (session && session.sock) {
+        try { await session.sock.logout(); } catch (e) { /* ignore */ }
+        try { session.sock.end(undefined); } catch (e) { /* ignore */ }
+    }
+    sessions.delete(phone);
+
+    // Delete auth files from disk
+    const authDir = path.join(__dirname, `auth_info_baileys_${phone}`);
+    if (fs.existsSync(authDir)) {
+        try {
+            fs.rmSync(authDir, { recursive: true, force: true });
+            console.log(`Deleted auth files for ${phone}`);
+        } catch (e) {
+            console.error(`Failed to delete auth dir for ${phone}:`, e.message);
+        }
+    }
+
+    io.emit('connection_status', { phone, status: 'logged_out' });
+    console.log(`Logged out ${phone} — session fully deleted`);
+    res.json({ success: true });
 });
 
 // --- Session Status ---
@@ -1069,6 +1180,41 @@ app.post('/api/block', async (req, res) => {
 
         await session.sock.updateBlockStatus(jid, action);
         res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// --- Group Info ---
+app.get('/api/groups/info', async (req, res) => {
+    try {
+        const { phone, groupId } = req.query;
+        if (!phone || !groupId) return res.status(400).json({ success: false, error: 'Missing parameters' });
+
+        const session = sessions.get(phone);
+        if (!session || !session.isConnected || !session.sock) return res.status(500).json({ success: false, error: 'Not connected' });
+
+        const metadata = await session.sock.groupMetadata(groupId);
+        let profilePic = null;
+        try { profilePic = await session.sock.profilePictureUrl(groupId, 'image'); } catch (e) { /* no pic */ }
+
+        res.json({
+            success: true,
+            group: {
+                id: metadata.id,
+                subject: metadata.subject,
+                description: metadata.desc || '',
+                owner: metadata.owner,
+                creation: metadata.creation,
+                size: metadata.size || metadata.participants?.length || 0,
+                profilePic: profilePic,
+                participants: (metadata.participants || []).map(p => ({
+                    jid: p.id,
+                    phone: p.id.split('@')[0],
+                    admin: p.admin || null
+                }))
+            }
+        });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     }
