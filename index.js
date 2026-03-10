@@ -69,7 +69,11 @@ const sessions = new Map();
 async function connectToWhatsApp(phone, socketId = null) {
     if (!phone) return;
 
-    const sessionDir = `auth_info_baileys_${phone}`;
+    const sessionDir = path.join(__dirname, 'auth_info_baileys', phone);
+    // Ensure parent dir exists
+    if (!fs.existsSync(path.join(__dirname, 'auth_info_baileys'))) {
+        fs.mkdirSync(path.join(__dirname, 'auth_info_baileys'), { recursive: true });
+    }
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
 
     // Fetch the latest WhatsApp Web version
@@ -156,7 +160,7 @@ async function connectToWhatsApp(phone, socketId = null) {
                 session.qrCodeData = '';
                 session.isConnected = false;
                 // Delete auth files so next connection starts fresh
-                const authDir = path.join(__dirname, `auth_info_baileys_${phone}`);
+                const authDir = path.join(__dirname, 'auth_info_baileys', phone);
                 if (fs.existsSync(authDir)) {
                     try {
                         fs.rmSync(authDir, { recursive: true, force: true });
@@ -646,9 +650,13 @@ function emitChatList(phone) {
 // ============================================
 
 function reconnectExistingSessions() {
-    const folders = fs.readdirSync(__dirname).filter(f => f.startsWith('auth_info_baileys_'));
-    folders.forEach(folder => {
-        const phone = folder.replace('auth_info_baileys_', '');
+    const baseDir = path.join(__dirname, 'auth_info_baileys');
+    if (!fs.existsSync(baseDir)) return;
+    const folders = fs.readdirSync(baseDir).filter(f => {
+        const fullPath = path.join(baseDir, f);
+        return fs.statSync(fullPath).isDirectory();
+    });
+    folders.forEach(phone => {
         console.log(`Auto-reconnecting existing session for ${phone}`);
         connectToWhatsApp(phone);
     });
@@ -760,7 +768,7 @@ app.post('/api/logout', async (req, res) => {
         }
 
         // Delete auth files from disk
-        const authDir = path.join(__dirname, `auth_info_baileys_${p}`);
+        const authDir = path.join(__dirname, 'auth_info_baileys', p);
         if (fs.existsSync(authDir)) {
             try {
                 fs.rmSync(authDir, { recursive: true, force: true });
@@ -775,7 +783,7 @@ app.post('/api/logout', async (req, res) => {
     // Second cleanup pass after a short delay (catch any race-recreated files)
     setTimeout(() => {
         for (const p of phonesToLogout) {
-            const authDir = path.join(__dirname, `auth_info_baileys_${p}`);
+            const authDir = path.join(__dirname, 'auth_info_baileys', p);
             if (fs.existsSync(authDir)) {
                 try {
                     fs.rmSync(authDir, { recursive: true, force: true });
