@@ -82,10 +82,15 @@ async function connectToWhatsApp(phone, socketId = null) {
         console.log('Could not fetch latest WA version, using default:', e.message);
     }
 
-    // Create SOCKS5 proxy agent to route through Cloudflare WARP VPN
-    const proxyUrl = process.env.WARP_PROXY || 'socks5h://10.0.0.1:40000';
-    console.log(`Using SOCKS5 proxy: ${proxyUrl}`);
-    const agent = new SocksProxyAgent(proxyUrl);
+    // Create SOCKS5 proxy agent to route through Cloudflare WARP VPN (optional)
+    const proxyUrl = process.env.WARP_PROXY || '';
+    let agent = undefined;
+    if (proxyUrl) {
+        console.log(`Using SOCKS5 proxy: ${proxyUrl}`);
+        agent = new SocksProxyAgent(proxyUrl);
+    } else {
+        console.log('No SOCKS5 proxy configured — connecting directly');
+    }
 
     const sockOptions = {
         auth: state,
@@ -96,10 +101,12 @@ async function connectToWhatsApp(phone, socketId = null) {
         defaultQueryTimeoutMs: 60000,
         retryRequestDelayMs: 500,
         markOnlineOnConnect: false,
-        agent: agent,
-        fetchAgent: agent,
         syncFullHistory: false
     };
+    if (agent) {
+        sockOptions.agent = agent;
+        sockOptions.fetchAgent = agent;
+    }
     if (version) sockOptions.version = version;
 
     const sock = makeWASocket(sockOptions);
