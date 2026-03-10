@@ -740,9 +740,8 @@ app.post('/api/logout', async (req, res) => {
     const { phone } = req.body;
     if (!phone) return res.status(400).json({ success: false, error: 'Phone required' });
 
-    // Also logout ALL sessions if only one exists (handle case where user enters different phone)
+    // Collect ALL sessions to logout
     const phonesToLogout = [phone];
-    // Find any other active sessions and add them
     sessions.forEach((data, p) => {
         if (!phonesToLogout.includes(p)) phonesToLogout.push(p);
     });
@@ -750,9 +749,11 @@ app.post('/api/logout', async (req, res) => {
     for (const p of phonesToLogout) {
         const session = sessions.get(p);
         if (session) {
-            // Mark as logging out to prevent auto-reconnect
             session._isLoggingOut = true;
             if (session.sock) {
+                // CRITICAL: Remove ALL event listeners BEFORE closing socket
+                // This prevents creds.update from recreating auth files after deletion
+                try { session.sock.ev.removeAllListeners(); } catch (e) { /* ignore */ }
                 try { session.sock.end(undefined); } catch (e) { /* ignore */ }
             }
             sessions.delete(p);
@@ -770,6 +771,19 @@ app.post('/api/logout', async (req, res) => {
         }
         console.log(`Logged out ${p} — session fully deleted`);
     }
+
+    // Second cleanup pass after a short delay (catch any race-recreated files)
+    setTimeout(() => {
+        for (const p of phonesToLogout) {
+            const authDir = path.join(__dirname, `auth_info_baileys_${p}`);
+            if (fs.existsSync(authDir)) {
+                try {
+                    fs.rmSync(authDir, { recursive: true, force: true });
+                    console.log(`Second cleanup: deleted auth files for ${p}`);
+                } catch (e) { /* ignore */ }
+            }
+        }
+    }, 1000);
 
     io.emit('connection_status', { phone, status: 'logged_out' });
     res.json({ success: true });
