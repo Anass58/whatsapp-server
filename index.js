@@ -69,10 +69,20 @@ const sessions = new Map();
 async function connectToWhatsApp(phone, socketId = null) {
     if (!phone) return;
 
-    const sessionDir = path.join(__dirname, 'auth_info_baileys', phone);
+    // Close any existing session for this phone first to avoid duplicates
+    const existingSession = sessions.get(phone);
+    if (existingSession && existingSession.sock) {
+        existingSession._isLoggingOut = true;
+        try { existingSession.sock.ev.removeAllListeners(); } catch(e) {}
+        try { existingSession.sock.end(undefined); } catch(e) {}
+        sessions.delete(phone);
+    }
+
+    const authBaseDir = path.join(__dirname, 'auth_info_baileys');
+    const sessionDir = path.join(authBaseDir, phone);
     // Ensure parent dir exists
-    if (!fs.existsSync(path.join(__dirname, 'auth_info_baileys'))) {
-        fs.mkdirSync(path.join(__dirname, 'auth_info_baileys'), { recursive: true });
+    if (!fs.existsSync(authBaseDir)) {
+        fs.mkdirSync(authBaseDir, { recursive: true });
     }
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
 
@@ -121,7 +131,9 @@ async function connectToWhatsApp(phone, socketId = null) {
         qrCodeData: '',
         isConnected: false,
         lastError: null,
-        chats: new Map()
+        chats: new Map(),
+        _retryCount: 0,
+        _isLoggingOut: false
     });
 
     // --- Connection events ---
@@ -132,6 +144,7 @@ async function connectToWhatsApp(phone, socketId = null) {
 
         if (qr) {
             session.qrCodeData = qr;
+            session._retryCount = 0; // Reset retry count when QR is generated
             console.log(`Sending QR code to frontend for ${phone}...`);
             io.emit('qr_update', { phone: phone, qr: qr });
         }
@@ -148,9 +161,22 @@ async function connectToWhatsApp(phone, socketId = null) {
             }
 
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            console.log(`connection closed for ${phone} due to`, session.lastError, ', reconnecting', shouldReconnect);
+            session._retryCount = (session._retryCount || 0) + 1;
+            console.log(`connection closed for ${phone} due to`, session.lastError, ', reconnecting', shouldReconnect, ', retry #', session._retryCount);
 
             if (shouldReconnect) {
+                // After 3 failed retries, delete auth files and start fresh for QR
+                if (session._retryCount >= 3) {
+                    console.log(`Too many retries (${session._retryCount}) for ${phone} — deleting auth and starting fresh`);
+                    const authDir = path.join(__dirname, 'auth_info_baileys', phone);
+                    if (fs.existsSync(authDir)) {
+                        try {
+                            fs.rmSync(authDir, { recursive: true, force: true });
+                            console.log(`Deleted stale auth files for ${phone}`);
+                        } catch (e) { console.error('Delete failed:', e.message); }
+                    }
+                    session._retryCount = 0;
+                }
                 io.emit('connection_status', { phone: phone, status: 'reconnecting', error: session.lastError });
                 setTimeout(() => connectToWhatsApp(phone), 3000);
             } else {
@@ -177,6 +203,7 @@ async function connectToWhatsApp(phone, socketId = null) {
             session.isConnected = true;
             session.qrCodeData = '';
             session.lastError = null;
+            session._retryCount = 0;
             io.emit('connection_status', { phone: phone, status: 'connected' });
 
             // Sync chats after connection
@@ -798,6 +825,36 @@ app.post('/api/logout', async (req, res) => {
 });
 
 // --- Session Status ---
+// --- Force Reset (nuclear option — delete everything) ---
+app.post('/api/force-reset', (req, res) => {
+    console.log('FORCE RESET — killing ALL sessions and auth files');
+    
+    // Close all active sessions
+    sessions.forEach((session, p) => {
+        if (session.sock) {
+            session._isLoggingOut = true;
+            try { session.sock.ev.removeAllListeners(); } catch(e) {}
+            try { session.sock.end(undefined); } catch(e) {}
+        }
+    });
+    sessions.clear();
+    
+    // Delete all auth directories
+    const authBaseDir = path.join(__dirname, 'auth_info_baileys');
+    if (fs.existsSync(authBaseDir)) {
+        try {
+            fs.rmSync(authBaseDir, { recursive: true, force: true });
+            fs.mkdirSync(authBaseDir, { recursive: true });
+            console.log('Deleted ALL auth files');
+        } catch (e) {
+            console.error('Force reset delete failed:', e.message);
+        }
+    }
+    
+    io.emit('connection_status', { phone: 'all', status: 'logged_out' });
+    res.json({ success: true, message: 'All sessions and auth files deleted' });
+});
+
 app.get('/api/status', (req, res) => {
     const { phone } = req.query;
 
