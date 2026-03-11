@@ -98,14 +98,15 @@ async function connectToWhatsApp(phone, socketId = null) {
             version = [2, 3000, 1017531287]; // Fallback version
         }
 
-        // Create SOCKS5 proxy agent to route through Cloudflare WARP VPN (optional)
-        const proxyUrl = process.env.WARP_PROXY || '';
+        // Create SOCKS5 proxy agent — check multiple env vars
+        // Coolify sets HTTPS_PROXY/HTTP_PROXY, manual config uses WARP_PROXY
+        const proxyUrl = process.env.WARP_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '';
         let agent = undefined;
         if (proxyUrl) {
             console.log(`Using SOCKS5 proxy: ${proxyUrl}`);
             agent = new SocksProxyAgent(proxyUrl);
         } else {
-            console.log('No SOCKS5 proxy configured — connecting directly');
+            console.log('No proxy configured — connecting directly');
         }
 
         const sockOptions = {
