@@ -100,9 +100,12 @@ async function connectToWhatsApp(phone, socketId = null) {
 
         // Create SOCKS5 proxy agent — check multiple env vars
         // Coolify sets HTTPS_PROXY/HTTP_PROXY, manual config uses WARP_PROXY
-        const proxyUrl = process.env.WARP_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '';
+        let proxyUrl = process.env.WARP_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '';
         let agent = undefined;
         if (proxyUrl) {
+            // Inside Docker, 127.0.0.1 refers to the container itself, not the host.
+            // Replace with host.docker.internal to reach the host's proxy.
+            proxyUrl = proxyUrl.replace('127.0.0.1', 'host.docker.internal').replace('localhost', 'host.docker.internal');
             console.log(`Using SOCKS5 proxy: ${proxyUrl}`);
             agent = new SocksProxyAgent(proxyUrl);
         } else {
@@ -753,7 +756,8 @@ app.get('/api/debug', (req, res) => {
         uptime: process.uptime(),
         memory: process.memoryUsage(),
         env: {
-            hasProxy: !!process.env.WARP_PROXY,
+            hasProxy: !!(process.env.WARP_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY),
+            proxyUrl: process.env.WARP_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || 'none',
             port: process.env.PORT || 3000,
             nodeVersion: process.version
         }

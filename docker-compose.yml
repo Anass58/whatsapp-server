@@ -8,4 +8,6 @@ services:
       - ./auth_info_baileys:/app/auth_info_baileys
       - ./media:/app/media
       - ./uploads:/app/uploads
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
