@@ -160,8 +160,8 @@ async function connectToWhatsApp(phone, socketId = null) {
         const sockOptions = {
             auth: state,
             printQRInTerminal: true,
-            logger: pino({ level: "info" }),
-            browser: Browsers.macOS('Desktop'),
+            logger: pino({ level: "error" }), // Reduce noisy logs
+            browser: ['Domira CRM', 'Chrome', '2.2413.51'], // Better browser setting to avoid 405 error
             connectTimeoutMs: 120000,
             defaultQueryTimeoutMs: 60000,
             retryRequestDelayMs: 500,
@@ -959,23 +959,18 @@ app.post('/api/logout', async (req, res) => {
                 console.log(`Deleted auth files for ${p}`);
             } catch (e) {
                 console.error(`Failed to delete auth dir for ${p}:`, e.message);
+                // Try again synchronously multiple times if locked
+                let retries = 3;
+                while (retries > 0 && fs.existsSync(authDir)) {
+                    try {
+                        require('child_process').execSync(`rm -rf "${authDir}"`); // Fallback for Linux
+                    } catch (err2) {}
+                    retries--;
+                }
             }
         }
         console.log(`Logged out ${p} — session fully deleted`);
     }
-
-    // Second cleanup pass after a short delay (catch any race-recreated files)
-    setTimeout(() => {
-        for (const p of phonesToLogout) {
-            const authDir = path.join(__dirname, 'auth_info_baileys', p);
-            if (fs.existsSync(authDir)) {
-                try {
-                    fs.rmSync(authDir, { recursive: true, force: true });
-                    console.log(`Second cleanup: deleted auth files for ${p}`);
-                } catch (e) { /* ignore */ }
-            }
-        }
-    }, 1000);
 
     io.emit('connection_status', { phone, status: 'logged_out' });
     res.json({ success: true });
