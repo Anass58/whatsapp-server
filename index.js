@@ -165,9 +165,11 @@ async function connectToWhatsApp(phone, socketId = null) {
             console.log(`connection closed for ${phone} due to`, session.lastError, ', reconnecting', shouldReconnect, ', retry #', session._retryCount);
 
             if (shouldReconnect) {
-                // After 3 failed retries, delete auth files and start fresh for QR
-                if (session._retryCount >= 3) {
-                    console.log(`Too many retries (${session._retryCount}) for ${phone} — deleting auth and starting fresh`);
+                // If we have no QR and session failed, auth files are likely stale
+                // Delete them immediately to force fresh QR generation instead of waiting 3 retries
+                const hasNoQr = !session.qrCodeData;
+                if (session._retryCount >= 3 || (hasNoQr && session._retryCount >= 1)) {
+                    console.log(`Retry #${session._retryCount} for ${phone} with no QR — deleting auth for fresh start`);
                     const authDir = path.join(__dirname, 'auth_info_baileys', phone);
                     if (fs.existsSync(authDir)) {
                         try {
