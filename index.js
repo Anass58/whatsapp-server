@@ -115,26 +115,14 @@ async function connectToWhatsApp(phone, socketId = null) {
             version = [2, 3000, 1017531287];
         }
 
-        // WARP SOCKS5 proxy — set via docker-compose (warp-proxy sidecar)
-        const proxyUrl = process.env.WARP_PROXY || '';
-        let agent = undefined;
-        if (proxyUrl) {
-            console.log(`Checking WARP proxy health: ${proxyUrl}`);
-            const proxyHealthy = await checkProxyHealth(proxyUrl);
-            if (proxyHealthy) {
-                console.log(`WARP proxy is healthy — using ${proxyUrl}`);
-                agent = new SocksProxyAgent(proxyUrl);
-            } else {
-                console.log(`WARP proxy not reachable at ${proxyUrl} — connecting directly`);
-            }
-        } else {
-            console.log('No WARP_PROXY set — connecting directly');
-        }
+        // Connect directly — WARP proxy is not accessible from this container
+        // HTTPS test confirms direct WhatsApp access works
+        console.log('Connecting directly to WhatsApp (no proxy)');
 
         const sockOptions = {
             auth: state,
             printQRInTerminal: true,
-            logger: pino({ level: "warn" }),
+            logger: pino({ level: "info" }),
             browser: Browsers.macOS('Desktop'),
             connectTimeoutMs: 120000,
             defaultQueryTimeoutMs: 60000,
@@ -142,10 +130,6 @@ async function connectToWhatsApp(phone, socketId = null) {
             markOnlineOnConnect: false,
             syncFullHistory: false
         };
-        if (agent) {
-            sockOptions.agent = agent;
-            sockOptions.fetchAgent = agent;
-        }
         if (version) sockOptions.version = version;
 
         console.log(`Creating WhatsApp socket for ${phone}...`);
@@ -178,7 +162,24 @@ async function connectToWhatsApp(phone, socketId = null) {
         if (connection === 'close') {
             session.isConnected = false;
             const statusCode = lastDisconnect?.error?.output?.statusCode;
-            session.lastError = lastDisconnect?.error?.message || statusCode || 'Unknown error';
+            const errorMsg = lastDisconnect?.error?.message || 'Unknown error';
+            const errorStack = lastDisconnect?.error?.stack || '';
+            const errorData = lastDisconnect?.error?.data || lastDisconnect?.error?.output?.payload || null;
+            session.lastError = errorMsg;
+            session._lastDisconnectDetails = {
+                statusCode,
+                message: errorMsg,
+                stack: errorStack.split('\n').slice(0, 5).join('\n'),
+                data: errorData,
+                timestamp: new Date().toISOString()
+            };
+
+            console.log(`\n=== CONNECTION CLOSED for ${phone} ===`);
+            console.log(`  Status Code: ${statusCode}`);
+            console.log(`  Error: ${errorMsg}`);
+            console.log(`  Stack: ${errorStack.split('\n').slice(0, 3).join(' | ')}`);
+            console.log(`  Data:`, JSON.stringify(errorData));
+            console.log(`===================================\n`);
 
             // If intentionally logging out, don't reconnect
             if (session._isLoggingOut) {
@@ -188,7 +189,7 @@ async function connectToWhatsApp(phone, socketId = null) {
 
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             session._retryCount = (session._retryCount || 0) + 1;
-            console.log(`connection closed for ${phone} due to`, session.lastError, ', reconnecting', shouldReconnect, ', retry #', session._retryCount);
+            console.log(`Reconnecting: ${shouldReconnect}, retry #${session._retryCount}`);
 
             if (shouldReconnect) {
                 // If we have no QR and session failed, auth files are likely stale
@@ -792,6 +793,7 @@ app.get('/api/debug', (req, res) => {
             hasQr: !!data.qrCodeData,
             qrLength: (data.qrCodeData || '').length,
             error: data.lastError,
+            disconnectDetails: data._lastDisconnectDetails || null,
             retryCount: data._retryCount,
             isLoggingOut: data._isLoggingOut,
             chatCount: data.chats?.size || 0
