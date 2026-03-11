@@ -128,18 +128,22 @@ async function connectToWhatsApp(phone, socketId = null) {
             version = [2, 3000, 1017531287]; // Fallback version
         }
 
-        // Create SOCKS5 proxy agent — check multiple env vars
-        // Coolify sets HTTPS_PROXY/HTTP_PROXY, manual config uses WARP_PROXY
-        let proxyUrl = process.env.WARP_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '';
+        // Create SOCKS5 proxy agent — only use if explicitly configured via WARP_PROXY
+        // Coolify sets HTTPS_PROXY/HTTP_PROXY pointing to host's WARP proxy on 127.0.0.1,
+        // but that address is unreachable from inside Docker containers.
+        // Direct connection to WhatsApp works fine from this container.
+        const proxyUrl = process.env.WARP_PROXY || '';
         let agent = undefined;
         if (proxyUrl) {
-            // Inside Docker, 127.0.0.1 refers to the container itself, not the host.
-            // Use dynamically detected Docker gateway IP to reach the host's proxy.
-            proxyUrl = proxyUrl.replace('127.0.0.1', DOCKER_HOST_IP).replace('localhost', DOCKER_HOST_IP);
-            console.log(`Using SOCKS5 proxy: ${proxyUrl}`);
-            agent = new SocksProxyAgent(proxyUrl);
+            let resolvedProxy = proxyUrl;
+            // If proxy points to localhost, try Docker gateway IP instead
+            if (resolvedProxy.includes('127.0.0.1') || resolvedProxy.includes('localhost')) {
+                resolvedProxy = resolvedProxy.replace('127.0.0.1', DOCKER_HOST_IP).replace('localhost', DOCKER_HOST_IP);
+            }
+            console.log(`Using SOCKS5 proxy: ${resolvedProxy}`);
+            agent = new SocksProxyAgent(resolvedProxy);
         } else {
-            console.log('No proxy configured — connecting directly');
+            console.log('Connecting directly to WhatsApp (no proxy)');
         }
 
         const sockOptions = {
