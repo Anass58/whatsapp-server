@@ -104,16 +104,54 @@ async function connectToWhatsApp(phone, socketId = null) {
         }
         const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
 
-        // Fetch the latest WhatsApp Web version with fallback
+        // Fetch the correct WhatsApp Web version
+        // The 405 error was caused by using wrong version numbers
         let version;
         try {
+            // First try Baileys' built-in version fetch
             const versionInfo = await fetchLatestWaWebVersion({});
             version = versionInfo.version;
-            console.log(`Using WhatsApp Web version: ${version}`);
+            console.log(`Baileys fetched WA Web version: ${version}`);
+            
+            // Verify it looks reasonable (major version should be 2, minor < 10000)
+            if (!version || version[0] !== 2 || version[1] > 10000) {
+                console.log('Fetched version looks suspicious, fetching from WhatsApp directly...');
+                throw new Error('Suspicious version');
+            }
         } catch (e) {
-            console.log('Could not fetch latest WA version, using default:', e.message);
-            version = [2, 3000, 1017531287];
+            console.log('Baileys version fetch failed or suspicious:', e.message);
+            // Fetch directly from WhatsApp's check-update API
+            try {
+                const https = require('https');
+                const waVersion = await new Promise((resolve, reject) => {
+                    const req = https.get('https://web.whatsapp.com/check-update?version=2.2413.51&platform=web', { timeout: 10000 }, (res) => {
+                        let data = '';
+                        res.on('data', chunk => data += chunk);
+                        res.on('end', () => {
+                            try {
+                                const json = JSON.parse(data);
+                                if (json.currentVersion) {
+                                    const parts = json.currentVersion.split('.').map(Number);
+                                    console.log(`WhatsApp check-update returned: ${json.currentVersion} → [${parts}]`);
+                                    resolve(parts);
+                                } else {
+                                    reject(new Error('No currentVersion'));
+                                }
+                            } catch (pe) { reject(pe); }
+                        });
+                    });
+                    req.on('error', reject);
+                    req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')); });
+                });
+                version = waVersion;
+            } catch (e2) {
+                console.log('WhatsApp check-update also failed:', e2.message);
+                // Hardcoded fallback — verified working as of 2026-03-11
+                version = [2, 2413, 51];
+                console.log(`Using hardcoded fallback version: ${version}`);
+            }
         }
+        console.log(`Final WhatsApp Web version: [${version}]`);
 
         // Connect directly — WARP proxy is not accessible from this container
         // HTTPS test confirms direct WhatsApp access works
