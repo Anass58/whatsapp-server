@@ -66,6 +66,36 @@ const sessions = new Map();
 // WhatsApp Connection
 // ============================================
 
+// Detect Docker host gateway IP dynamically
+function getDockerHostIP() {
+    try {
+        // Read the default gateway from Linux routing table
+        const routeData = fs.readFileSync('/proc/net/route', 'utf8');
+        const lines = routeData.split('\n');
+        for (const line of lines) {
+            const parts = line.trim().split(/\s+/);
+            // Default route has destination 00000000
+            if (parts[1] === '00000000') {
+                // Gateway is in hex, little-endian
+                const hexGw = parts[2];
+                const ip = [
+                    parseInt(hexGw.substr(6, 2), 16),
+                    parseInt(hexGw.substr(4, 2), 16),
+                    parseInt(hexGw.substr(2, 2), 16),
+                    parseInt(hexGw.substr(0, 2), 16)
+                ].join('.');
+                console.log(`Detected Docker host gateway: ${ip}`);
+                return ip;
+            }
+        }
+    } catch (e) {
+        console.log('Could not detect Docker gateway:', e.message);
+    }
+    return '172.17.0.1'; // Fallback
+}
+
+const DOCKER_HOST_IP = getDockerHostIP();
+
 async function connectToWhatsApp(phone, socketId = null) {
     if (!phone) return;
 
@@ -104,8 +134,8 @@ async function connectToWhatsApp(phone, socketId = null) {
         let agent = undefined;
         if (proxyUrl) {
             // Inside Docker, 127.0.0.1 refers to the container itself, not the host.
-            // Use Docker bridge gateway IP (172.17.0.1) to reach the host's proxy.
-            proxyUrl = proxyUrl.replace('127.0.0.1', '172.17.0.1').replace('localhost', '172.17.0.1');
+            // Use dynamically detected Docker gateway IP to reach the host's proxy.
+            proxyUrl = proxyUrl.replace('127.0.0.1', DOCKER_HOST_IP).replace('localhost', DOCKER_HOST_IP);
             console.log(`Using SOCKS5 proxy: ${proxyUrl}`);
             agent = new SocksProxyAgent(proxyUrl);
         } else {
@@ -758,6 +788,8 @@ app.get('/api/debug', (req, res) => {
         env: {
             hasProxy: !!(process.env.WARP_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY),
             proxyUrl: process.env.WARP_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || 'none',
+            resolvedProxyUrl: (process.env.WARP_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '').replace('127.0.0.1', DOCKER_HOST_IP),
+            dockerHostIP: DOCKER_HOST_IP,
             port: process.env.PORT || 3000,
             nodeVersion: process.version
         }
