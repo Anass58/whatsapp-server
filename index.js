@@ -78,63 +78,66 @@ async function connectToWhatsApp(phone, socketId = null) {
         sessions.delete(phone);
     }
 
-    const authBaseDir = path.join(__dirname, 'auth_info_baileys');
-    const sessionDir = path.join(authBaseDir, phone);
-    // Ensure parent dir exists
-    if (!fs.existsSync(authBaseDir)) {
-        fs.mkdirSync(authBaseDir, { recursive: true });
-    }
-    const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
-
-    // Fetch the latest WhatsApp Web version
-    let version;
     try {
-        const versionInfo = await fetchLatestWaWebVersion({});
-        version = versionInfo.version;
-        console.log(`Using WhatsApp Web version: ${version}`);
-    } catch (e) {
-        console.log('Could not fetch latest WA version, using default:', e.message);
-    }
+        const authBaseDir = path.join(__dirname, 'auth_info_baileys');
+        const sessionDir = path.join(authBaseDir, phone);
+        // Ensure parent dir exists
+        if (!fs.existsSync(authBaseDir)) {
+            fs.mkdirSync(authBaseDir, { recursive: true });
+        }
+        const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
 
-    // Create SOCKS5 proxy agent to route through Cloudflare WARP VPN (optional)
-    const proxyUrl = process.env.WARP_PROXY || '';
-    let agent = undefined;
-    if (proxyUrl) {
-        console.log(`Using SOCKS5 proxy: ${proxyUrl}`);
-        agent = new SocksProxyAgent(proxyUrl);
-    } else {
-        console.log('No SOCKS5 proxy configured — connecting directly');
-    }
+        // Fetch the latest WhatsApp Web version with fallback
+        let version;
+        try {
+            const versionInfo = await fetchLatestWaWebVersion({});
+            version = versionInfo.version;
+            console.log(`Using WhatsApp Web version: ${version}`);
+        } catch (e) {
+            console.log('Could not fetch latest WA version, using default:', e.message);
+            version = [2, 3000, 1017531287]; // Fallback version
+        }
 
-    const sockOptions = {
-        auth: state,
-        printQRInTerminal: true,
-        logger: pino({ level: "warn" }),
-        browser: ["Domira CRM", "Chrome", "22.0"],
-        connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 60000,
-        retryRequestDelayMs: 500,
-        markOnlineOnConnect: false,
-        syncFullHistory: false
-    };
-    if (agent) {
-        sockOptions.agent = agent;
-        sockOptions.fetchAgent = agent;
-    }
-    if (version) sockOptions.version = version;
+        // Create SOCKS5 proxy agent to route through Cloudflare WARP VPN (optional)
+        const proxyUrl = process.env.WARP_PROXY || '';
+        let agent = undefined;
+        if (proxyUrl) {
+            console.log(`Using SOCKS5 proxy: ${proxyUrl}`);
+            agent = new SocksProxyAgent(proxyUrl);
+        } else {
+            console.log('No SOCKS5 proxy configured — connecting directly');
+        }
 
-    const sock = makeWASocket(sockOptions);
+        const sockOptions = {
+            auth: state,
+            printQRInTerminal: true,
+            logger: pino({ level: "warn" }),
+            browser: ["Domira CRM", "Chrome", "22.0"],
+            connectTimeoutMs: 120000,
+            defaultQueryTimeoutMs: 60000,
+            retryRequestDelayMs: 500,
+            markOnlineOnConnect: false,
+            syncFullHistory: false
+        };
+        if (agent) {
+            sockOptions.agent = agent;
+            sockOptions.fetchAgent = agent;
+        }
+        if (version) sockOptions.version = version;
 
-    // Store session info
-    sessions.set(phone, {
-        sock: sock,
-        qrCodeData: '',
-        isConnected: false,
-        lastError: null,
-        chats: new Map(),
-        _retryCount: 0,
-        _isLoggingOut: false
-    });
+        console.log(`Creating WhatsApp socket for ${phone}...`);
+        const sock = makeWASocket(sockOptions);
+
+        // Store session info
+        sessions.set(phone, {
+            sock: sock,
+            qrCodeData: '',
+            isConnected: false,
+            lastError: null,
+            chats: new Map(),
+            _retryCount: 0,
+            _isLoggingOut: false
+        });
 
     // --- Connection events ---
     sock.ev.on('connection.update', (update) => {
@@ -453,6 +456,23 @@ async function connectToWhatsApp(phone, socketId = null) {
         if (!data.id) return;
         io.emit('presence_update', { phone: phone, jid: data.id, presences: data.presences });
     });
+
+    } catch (err) {
+        console.error(`CRITICAL: Failed to create WhatsApp socket for ${phone}:`, err.message);
+        // Store a stub session so /api/status can report the error
+        sessions.set(phone, {
+            sock: null,
+            qrCodeData: '',
+            isConnected: false,
+            lastError: `Socket creation failed: ${err.message}`,
+            chats: new Map(),
+            _retryCount: 0,
+            _isLoggingOut: false
+        });
+        io.emit('connection_status', { phone: phone, status: 'reconnecting', error: err.message });
+        // Retry after 5 seconds
+        setTimeout(() => connectToWhatsApp(phone), 5000);
+    }
 }
 
 // ============================================
@@ -699,6 +719,44 @@ app.get('/api/test-network', async (req, res) => {
 
     results.node_version = process.version;
     res.json(results);
+});
+
+// --- Debug Info ---
+app.get('/api/debug', (req, res) => {
+    const sessionDebug = {};
+    sessions.forEach((data, phone) => {
+        sessionDebug[phone] = {
+            connected: data.isConnected,
+            hasSocket: !!data.sock,
+            hasQr: !!data.qrCodeData,
+            qrLength: (data.qrCodeData || '').length,
+            error: data.lastError,
+            retryCount: data._retryCount,
+            isLoggingOut: data._isLoggingOut,
+            chatCount: data.chats?.size || 0
+        };
+    });
+    
+    // Check auth dirs
+    const authBaseDir = path.join(__dirname, 'auth_info_baileys');
+    let authDirs = [];
+    try {
+        if (fs.existsSync(authBaseDir)) {
+            authDirs = fs.readdirSync(authBaseDir);
+        }
+    } catch (e) {}
+
+    res.json({
+        sessions: sessionDebug,
+        authDirectories: authDirs,
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
+        env: {
+            hasProxy: !!process.env.WARP_PROXY,
+            port: process.env.PORT || 3000,
+            nodeVersion: process.version
+        }
+    });
 });
 
 // --- Start Session ---
