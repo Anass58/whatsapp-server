@@ -741,6 +741,44 @@ app.get('/api/test-network', async (req, res) => {
     }
 
     results.node_version = process.version;
+
+    // Test WARP proxy connectivity
+    const warpProxy = process.env.WARP_PROXY || '';
+    if (warpProxy) {
+        try {
+            const net = require('net');
+            // Parse proxy URL to get host and port
+            const proxyMatch = warpProxy.match(/:\/\/([^:]+):(\d+)/);
+            if (proxyMatch) {
+                const [, host, port] = proxyMatch;
+                const tcpResult = await new Promise((resolve) => {
+                    const socket = new net.Socket();
+                    socket.setTimeout(5000);
+                    socket.on('connect', () => { socket.destroy(); resolve({ success: true, host, port }); });
+                    socket.on('error', (e) => { socket.destroy(); resolve({ success: false, host, port, error: e.message }); });
+                    socket.on('timeout', () => { socket.destroy(); resolve({ success: false, host, port, error: 'Timeout' }); });
+                    socket.connect(parseInt(port), host);
+                });
+                results.warp_proxy_tcp = tcpResult;
+            }
+            // Also test through proxy
+            const proxyHealth = await checkProxyHealth(warpProxy);
+            results.warp_proxy_https = { success: proxyHealth, url: warpProxy };
+        } catch (e) {
+            results.warp_proxy_test = { success: false, error: e.message };
+        }
+    } else {
+        results.warp_proxy_tcp = { skipped: true, reason: 'WARP_PROXY not set' };
+    }
+
+    // Check if inside Docker and network mode
+    try {
+        const hostname = require('os').hostname();
+        const networkInterfaces = require('os').networkInterfaces();
+        const interfaces = Object.keys(networkInterfaces);
+        results.container_info = { hostname, interfaces };
+    } catch (e) {}
+
     res.json(results);
 });
 
