@@ -104,8 +104,8 @@ async function connectToWhatsApp(phone, socketId = null) {
         let agent = undefined;
         if (proxyUrl) {
             // Inside Docker, 127.0.0.1 refers to the container itself, not the host.
-            // Replace with host.docker.internal to reach the host's proxy.
-            proxyUrl = proxyUrl.replace('127.0.0.1', 'host.docker.internal').replace('localhost', 'host.docker.internal');
+            // Use Docker bridge gateway IP (172.17.0.1) to reach the host's proxy.
+            proxyUrl = proxyUrl.replace('127.0.0.1', '172.17.0.1').replace('localhost', '172.17.0.1');
             console.log(`Using SOCKS5 proxy: ${proxyUrl}`);
             agent = new SocksProxyAgent(proxyUrl);
         } else {
