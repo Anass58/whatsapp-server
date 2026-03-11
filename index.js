@@ -598,7 +598,13 @@ function extractMessageContent(msg) {
 async function downloadAndSaveMedia(msg, phone) {
     try {
         const buffer = await downloadMediaMessage(msg, 'buffer', {});
-        const m = msg.message;
+        let m = msg.message;
+
+        // Unwrap Baileys v7 message wrappers (same as extractMessageContent)
+        if (m.ephemeralMessage) m = m.ephemeralMessage.message;
+        if (m.viewOnceMessage) m = m.viewOnceMessage.message;
+        if (m.viewOnceMessageV2) m = m.viewOnceMessageV2.message;
+        if (m.documentWithCaptionMessage) m = m.documentWithCaptionMessage.message;
 
         let ext = 'bin';
         const mediaMsg = m.imageMessage || m.videoMessage || m.audioMessage || m.documentMessage || m.stickerMessage;
@@ -632,45 +638,7 @@ function getContactName(session, remoteJid, msg) {
     return remoteJid.split('@')[0];
 }
 
-async function syncChats(phone) {
-    const session = sessions.get(phone);
-    if (!session || !session.isConnected) return;
-
-    // Give Baileys time to receive chats
-    setTimeout(() => {
-        emitChatList(phone);
-    }, 3000);
-}
-
-function emitChatList(phone) {
-    const session = sessions.get(phone);
-    if (!session) return;
-
-    const chatList = [];
-    session.chats.forEach((chat, jid) => {
-        if (jid === 'status@broadcast') return;
-        if (!jid.includes('@')) return;
-
-        const chatPhone = jid.split('@')[0];
-        const isGroup = jid.endsWith('@g.us');
-
-        chatList.push({
-            jid: jid,
-            phone: chatPhone,
-            name: chat.contactName || chat.name || chat.notify || chat.subject || chatPhone,
-            isGroup: isGroup,
-            lastMessage: chat.lastMessage || chat.conversationTimestamp ? '' : '',
-            lastMessageTime: chat.lastMessageTime || (chat.conversationTimestamp ? chat.conversationTimestamp * 1000 : 0),
-            unreadCount: chat.unreadCount || chat.unreadCount || 0,
-            profilePicture: null
-        });
-    });
-
-    // Sort by last message time
-    chatList.sort((a, b) => (b.lastMessageTime || 0) - (a.lastMessageTime || 0));
-
-    io.emit('chats_sync', { phone: phone, chats: chatList });
-}
+// NOTE: syncChats and emitChatList are defined below in the "Chat Sync Functions" section
 
 // ============================================
 // Reconnect existing sessions on startup
@@ -862,7 +830,7 @@ app.get('/api/status', (req, res) => {
         const session = sessions.get(phone);
 
         // Check if auth folder exists (session data on disk)
-        const authDir = path.join(__dirname, `auth_info_baileys_${phone}`);
+        const authDir = path.join(__dirname, 'auth_info_baileys', phone);
         const authExists = fs.existsSync(authDir);
 
         if (!session) {
@@ -1130,24 +1098,7 @@ app.post('/api/syncContacts', async (req, res) => {
     }
 });
 
-// --- Disconnect Session ---
-app.post('/api/disconnect', async (req, res) => {
-    const { phone } = req.body;
-    if (!phone) return res.status(400).json({ success: false, error: 'Phone required' });
-
-    const session = sessions.get(phone);
-    if (session?.sock) {
-        await session.sock.logout();
-        sessions.delete(phone);
-        // Remove auth folder
-        const authDir = path.join(__dirname, `auth_info_baileys_${phone}`);
-        if (fs.existsSync(authDir)) {
-            fs.rmSync(authDir, { recursive: true });
-        }
-    }
-
-    res.json({ success: true });
-});
+// NOTE: Duplicate /api/disconnect route removed — the primary one is defined above (line ~756)
 
 // ============================================
 // Extra WhatsApp Features

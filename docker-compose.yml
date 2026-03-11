@@ -6,4 +6,6 @@ services:
       - "3000:3000"
     volumes:
       - ./auth_info_baileys:/app/auth_info_baileys
+      - ./media:/app/media
+      - ./uploads:/app/uploads
     restart: unless-stopped
