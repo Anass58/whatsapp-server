@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestWaWebVersion, downloadMediaMessage } = require('@whiskeysockets/baileys');
+const { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestWaWebVersion, downloadMediaMessage, Browsers } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const { Server } = require('socket.io');
@@ -66,35 +66,23 @@ const sessions = new Map();
 // WhatsApp Connection
 // ============================================
 
-// Detect Docker host gateway IP dynamically
-function getDockerHostIP() {
+// Check if WARP proxy is reachable
+async function checkProxyHealth(proxyUrl) {
     try {
-        // Read the default gateway from Linux routing table
-        const routeData = fs.readFileSync('/proc/net/route', 'utf8');
-        const lines = routeData.split('\n');
-        for (const line of lines) {
-            const parts = line.trim().split(/\s+/);
-            // Default route has destination 00000000
-            if (parts[1] === '00000000') {
-                // Gateway is in hex, little-endian
-                const hexGw = parts[2];
-                const ip = [
-                    parseInt(hexGw.substr(6, 2), 16),
-                    parseInt(hexGw.substr(4, 2), 16),
-                    parseInt(hexGw.substr(2, 2), 16),
-                    parseInt(hexGw.substr(0, 2), 16)
-                ].join('.');
-                console.log(`Detected Docker host gateway: ${ip}`);
-                return ip;
-            }
-        }
+        const agent = new SocksProxyAgent(proxyUrl);
+        const https = require('https');
+        return new Promise((resolve) => {
+            const req = https.get('https://web.whatsapp.com', { agent, timeout: 10000 }, (res) => {
+                resolve(true);
+                req.destroy();
+            });
+            req.on('error', () => resolve(false));
+            req.on('timeout', () => { req.destroy(); resolve(false); });
+        });
     } catch (e) {
-        console.log('Could not detect Docker gateway:', e.message);
+        return false;
     }
-    return '172.17.0.1'; // Fallback
 }
-
-const DOCKER_HOST_IP = getDockerHostIP();
 
 async function connectToWhatsApp(phone, socketId = null) {
     if (!phone) return;
@@ -111,7 +99,6 @@ async function connectToWhatsApp(phone, socketId = null) {
     try {
         const authBaseDir = path.join(__dirname, 'auth_info_baileys');
         const sessionDir = path.join(authBaseDir, phone);
-        // Ensure parent dir exists
         if (!fs.existsSync(authBaseDir)) {
             fs.mkdirSync(authBaseDir, { recursive: true });
         }
@@ -125,32 +112,30 @@ async function connectToWhatsApp(phone, socketId = null) {
             console.log(`Using WhatsApp Web version: ${version}`);
         } catch (e) {
             console.log('Could not fetch latest WA version, using default:', e.message);
-            version = [2, 3000, 1017531287]; // Fallback version
+            version = [2, 3000, 1017531287];
         }
 
-        // Create SOCKS5 proxy agent — only use if explicitly configured via WARP_PROXY
-        // Coolify sets HTTPS_PROXY/HTTP_PROXY pointing to host's WARP proxy on 127.0.0.1,
-        // but that address is unreachable from inside Docker containers.
-        // Direct connection to WhatsApp works fine from this container.
+        // WARP SOCKS5 proxy — set via docker-compose (warp-proxy sidecar)
         const proxyUrl = process.env.WARP_PROXY || '';
         let agent = undefined;
         if (proxyUrl) {
-            let resolvedProxy = proxyUrl;
-            // If proxy points to localhost, try Docker gateway IP instead
-            if (resolvedProxy.includes('127.0.0.1') || resolvedProxy.includes('localhost')) {
-                resolvedProxy = resolvedProxy.replace('127.0.0.1', DOCKER_HOST_IP).replace('localhost', DOCKER_HOST_IP);
+            console.log(`Checking WARP proxy health: ${proxyUrl}`);
+            const proxyHealthy = await checkProxyHealth(proxyUrl);
+            if (proxyHealthy) {
+                console.log(`WARP proxy is healthy — using ${proxyUrl}`);
+                agent = new SocksProxyAgent(proxyUrl);
+            } else {
+                console.log(`WARP proxy not reachable at ${proxyUrl} — connecting directly`);
             }
-            console.log(`Using SOCKS5 proxy: ${resolvedProxy}`);
-            agent = new SocksProxyAgent(resolvedProxy);
         } else {
-            console.log('Connecting directly to WhatsApp (no proxy)');
+            console.log('No WARP_PROXY set — connecting directly');
         }
 
         const sockOptions = {
             auth: state,
             printQRInTerminal: true,
             logger: pino({ level: "warn" }),
-            browser: ["Domira CRM", "Chrome", "22.0"],
+            browser: Browsers.macOS('Desktop'),
             connectTimeoutMs: 120000,
             defaultQueryTimeoutMs: 60000,
             retryRequestDelayMs: 500,
@@ -790,10 +775,7 @@ app.get('/api/debug', (req, res) => {
         uptime: process.uptime(),
         memory: process.memoryUsage(),
         env: {
-            hasProxy: !!(process.env.WARP_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY),
-            proxyUrl: process.env.WARP_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || 'none',
-            resolvedProxyUrl: (process.env.WARP_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '').replace('127.0.0.1', DOCKER_HOST_IP),
-            dockerHostIP: DOCKER_HOST_IP,
+            warpProxy: process.env.WARP_PROXY || 'not set',
             port: process.env.PORT || 3000,
             nodeVersion: process.version
         }
@@ -820,6 +802,34 @@ app.post('/api/start', (req, res) => {
     connectToWhatsApp(formattedPhone);
     res.json({ success: true, status: 'initializing' });
 });
+
+// --- Request Pairing Code (alternative to QR) ---
+app.post('/api/request-pairing-code', async (req, res) => {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ success: false, error: 'Phone number is required' });
+
+    const formattedPhone = phone.replace(/[^0-9]/g, '');
+    const session = sessions.get(formattedPhone);
+
+    if (!session || !session.sock) {
+        return res.status(400).json({ success: false, error: 'Session not found. Call /api/start first.' });
+    }
+
+    if (session.isConnected) {
+        return res.json({ success: true, status: 'already_connected' });
+    }
+
+    try {
+        const code = await session.sock.requestPairingCode(formattedPhone);
+        console.log(`Pairing code for ${formattedPhone}: ${code}`);
+        io.emit('pairing_code', { phone: formattedPhone, code: code });
+        res.json({ success: true, code: code });
+    } catch (e) {
+        console.error('Pairing code request failed:', e.message);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
 
 // --- Disconnect Session (keeps auth on disk) ---
 app.post('/api/disconnect', (req, res) => {

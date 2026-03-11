@@ -1,13 +1,20 @@
-version: '3.8'
 services:
+  warp-proxy:
+    image: kingcc/warproxy:latest
+    restart: unless-stopped
+    environment:
+      - PROXY_PORT=1080
+
   whatsapp-server:
     build: .
     ports:
-      - "3000:3000"
+      - "${PORT:-3000}:3000"
+    environment:
+      - WARP_PROXY=socks5h://warp-proxy:1080
     volumes:
       - ./auth_info_baileys:/app/auth_info_baileys
       - ./media:/app/media
       - ./uploads:/app/uploads
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      - warp-proxy
     restart: unless-stopped
