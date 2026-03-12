@@ -2,8 +2,8 @@ require('dotenv').config();
 const { Pool } = require('pg');
 
 const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false } // Required for some hosted PostgreSQL instances like Coolify outside localhost
+    connectionString: process.env.DATABASE_URL || "postgresql://postgres:qCkPiGs4XyDqChkvTThkqf7OCgfHiNVOye80gI8jgXsMpWxO5G8U0ohPT4zWlkOc@postgresql-datawhatsapp-evol:5432/postgres",
+    // ssl: { rejectUnauthorized: false } // Disabled for Coolify's internal network to prevent connection rejection
 });
 
 const initDB = async () => {
