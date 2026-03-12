@@ -2,7 +2,8 @@ require('dotenv').config();
 const { Pool } = require('pg');
 
 const pool = new Pool({
-    connectionString: process.env.DATABASE_URL || "postgresql://postgres:qCkPiGs4XyDqChkvTThkqf7OCgfHiNVOye80gI8jgXsMpWxO5G8U0ohPT4zWlkOc@postgresql-datawhatsapp-evol:5432/postgres",
+    // Fallback to the raw internal IPv4 address to bypass Docker DNS (EAI_AGAIN) errors
+    connectionString: process.env.DATABASE_URL || "postgresql://postgres:qCkPiGs4XyDqChkvTThkqf7OCgfHiNVOye80gI8jgXsMpWxO5G8U0ohPT4zWlkOc@172.18.0.3:5432/postgres",
     // ssl: { rejectUnauthorized: false } // Disabled for Coolify's internal network to prevent connection rejection
 });
 
