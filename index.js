@@ -10,6 +10,11 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const mime = require('mime-types');
+const axios = require('axios'); // Used for Webhooks
+const db = require('./db'); // External Postgres DB
+
+// Initialize external DB
+db.initDB();
 
 const app = express();
 const server = http.createServer(app);
@@ -52,6 +57,22 @@ if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 // Serve media files statically
 app.use('/media', express.static(MEDIA_DIR));
+
+// Serve public files statically for dashboard
+const PUBLIC_DIR = path.join(__dirname, 'public');
+if (!fs.existsSync(PUBLIC_DIR)) fs.mkdirSync(PUBLIC_DIR, { recursive: true });
+app.use(express.static(PUBLIC_DIR));
+
+// Admin login endpoint
+app.post('/api/admin/login', (req, res) => {
+    const { password } = req.body;
+    const adminPassword = process.env.ADMIN_PASSWORD || 'admin123';
+    if (password === adminPassword) {
+        res.json({ success: true, token: 'evolution_admin_token_2026' });
+    } else {
+        res.status(401).json({ success: false, error: 'كلمة المرور غير صحيحة' });
+    }
+});
 
 // Multer config for file uploads
 const upload = multer({
@@ -267,6 +288,14 @@ async function connectToWhatsApp(phone, socketId = null) {
             }
         } else if (connection === 'open') {
             console.log(`opened connection for ${phone}`);
+            
+            // Save instance to DB
+            db.query(`
+                INSERT INTO instances (phone, status) 
+                VALUES ($1, 'connected') 
+                ON CONFLICT (phone) DO UPDATE SET status = 'connected';
+            `, [phone]).catch(err => console.error('Failed to save instance to DB:', err));
+
             session.isConnected = true;
             session.qrCodeData = '';
             session.lastError = null;
@@ -470,6 +499,19 @@ async function connectToWhatsApp(phone, socketId = null) {
             };
 
             io.emit('new_message', messageData);
+
+            // Save message to PostgeSQL
+            db.query(`
+                INSERT INTO messages (instance_phone, remote_jid, message_id, from_me, push_name, message_text, media_url, message_type, timestamp)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ON CONFLICT (instance_phone, remote_jid, message_id) DO NOTHING;
+            `, [
+                phone, remoteJid, msg.key.id, isFromMe, msg.pushName || contactName, 
+                msgContent.text, messageData.mediaUrl, msgContent.mediaType, messageData.timestamp
+            ]).catch(e => console.error('DB Insert Error:', e));
+
+            // Send Webhook if configured
+            sendWebhook(phone, 'messages.upsert', messageData);
 
             // Update chat in session
             const chatData = session.chats.get(remoteJid) || {};
@@ -745,6 +787,52 @@ reconnectExistingSessions();
 // ============================================
 // API Endpoints
 // ============================================
+
+// ============================================
+// Webhook & Helpers
+// ============================================
+async function sendWebhook(phone, eventType, data) {
+    try {
+        const result = await db.query('SELECT webhook_url FROM instances WHERE phone = $1', [phone]);
+        if (result.rows.length > 0 && result.rows[0].webhook_url) {
+            const url = result.rows[0].webhook_url;
+            await axios.post(url, {
+                event: eventType,
+                instance: phone,
+                data: data
+            }).catch(e => console.error(`Webhook send failed for ${phone}:`, e.message));
+        }
+    } catch (err) {
+        console.error('Error fetching webhook URL:', err);
+    }
+}
+
+// --- Configure Webhook Endpoint ---
+app.post('/api/webhook/config', async (req, res) => {
+    const { phone, webhookUrl } = req.body;
+    if (!phone) return res.status(400).json({ success: false, error: 'Phone number is required' });
+
+    try {
+        await db.query(`
+            INSERT INTO instances (phone, webhook_url) 
+            VALUES ($1, $2)
+            ON CONFLICT (phone) DO UPDATE SET webhook_url = $2;
+        `, [phone, webhookUrl]);
+        res.json({ success: true, message: 'Webhook configured successfully' });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: 'Database error' });
+    }
+});
+
+app.get('/api/webhook/config/:phone', async (req, res) => {
+    try {
+        const result = await db.query('SELECT webhook_url FROM instances WHERE phone = $1', [req.params.phone]);
+        res.json({ success: true, webhookUrl: result.rows[0]?.webhook_url || '' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: 'Database error' });
+    }
+});
 
 // --- Network Test ---
 app.get('/api/test-network', async (req, res) => {

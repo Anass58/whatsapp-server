@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Evolution API - WhatsApp Manager</title>
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <!-- Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="toast hidden">
+        <i class="fas fa-info-circle toast-icon"></i>
+        <span class="toast-message">Message</span>
+    </div>
+
+    <!-- Login View -->
+    <div id="loginView" class="view-container active">
+        <div class="login-box glass-panel">
+            <div class="brand">
+                <i class="fab fa-whatsapp brand-icon"></i>
+                <h2>Evolution Manager</h2>
+                <p>تسجيل الدخول لإدارة جلسات واتساب</p>
+            </div>
+            <form id="loginForm">
+                <div class="input-group">
+                    <i class="fas fa-lock"></i>
+                    <input type="password" id="adminPassword" placeholder="كلمة المرور" required autocomplete="current-password">
+                </div>
+                <button type="submit" class="btn btn-primary btn-block">
+                    <span>دخول</span>
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+            </form>
+        </div>
+        
+        <!-- Background elements for visual flair -->
+        <div class="bg-shape shape1"></div>
+        <div class="bg-shape shape2"></div>
+        <div class="bg-shape shape3"></div>
+    </div>
+
+    <!-- Dashboard View -->
+    <div id="dashboardView" class="view-container">
+        
+        <!-- Sidebar -->
+        <aside class="sidebar glass-panel">
+            <div class="sidebar-header">
+                <i class="fab fa-whatsapp brand-icon"></i>
+                <h2>Evolution</h2>
+            </div>
+            <ul class="nav-links">
+                <li class="active"><a href="#" onclick="showSection('instances')"><i class="fas fa-server"></i> الجلسات (Instances)</a></li>
+                <li><a href="#" onclick="showSection('api_docs')"><i class="fas fa-code"></i> API & Endpoints</a></li>
+            </ul>
+            <div class="sidebar-footer">
+                <button class="btn btn-outline" onclick="logoutAdmin()">
+                    <i class="fas fa-sign-out-alt"></i> تسجيل الخروج
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            
+            <header class="top-nav glass-panel">
+                <div class="nav-title">إدارة الجلسات</div>
+                <div class="nav-actions">
+                    <div class="server-status">
+                        <span class="status-dot"></span>
+                        <span>متصل بالسيرفر</span>
+                    </div>
+                </div>
+            </header>
+
+            <div id="section-instances" class="content-section active">
+                <div class="section-header">
+                    <div class="header-info">
+                        <h3>أرقام واتساب المتصلة</h3>
+                        <p>إدارة الجلسات، ربط أرقام جديدة، ومراقبة حالة الاتصال.</p>
+                    </div>
+                    <button class="btn btn-primary" onclick="openAddInstanceModal()">
+                        <i class="fas fa-plus"></i> إضافة رقم جديد
+                    </button>
+                </div>
+
+                <!-- Loader -->
+                <div id="instancesLoader" class="loader-container">
+                    <div class="spinner"></div>
+                    <p>جاري تحميل الجلسات...</p>
+                </div>
+
+                <!-- Instances Grid -->
+                <div id="instancesGrid" class="instances-grid">
+                    <!-- Cards will be populated here via JS -->
+                </div>
+                
+                <!-- Empty State -->
+                <div id="emptyState" class="empty-state hidden p-5 text-center">
+                    <i class="fas fa-plug empty-icon fa-3x mb-3 text-muted"></i>
+                    <h4>لا توجد جلسات حالياً</h4>
+                    <p class="text-muted">قم بإضافة رقم جديد لربط واتساب بالسيرفر.</p>
+                </div>
+            </div>
+
+            <div id="section-api_docs" class="content-section">
+                <div class="section-header">
+                    <div class="header-info">
+                        <h3>دليل الـ API المباشر</h3>
+                        <p>استخدم الروابط التالية لإرسال رسائل من خلال تطبيقك الخارجي.</p>
+                    </div>
+                </div>
+                
+                <div class="glass-panel p-4">
+                    <div class="api-endpoint mb-4">
+                        <h5><span class="badge method-post">POST</span> /api/sendText</h5>
+                        <p>إرسال رسالة نصية عبر رقم مسجل.</p>
+                        <div class="code-block" dir="ltr">
+                            <pre><code>{
+  "senderPhone": "YourConnectedNumber",
+  "number": "TargetNumber",
+  "text": "Hello World!"
+}</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint mb-4">
+                        <h5><span class="badge method-post">POST</span> /api/sendMedia</h5>
+                        <p>إرسال وسائط عبر رقم مسجل (Form-Data).</p>
+                        <ul class="form-data-list">
+                            <li><code>senderPhone</code>: الرقم المسجل الخاص بك النصي</li>
+                            <li><code>number</code>: رقم المستلم</li>
+                            <li><code>mediaType</code>: صورة/فيديو/الخ (حسب نوعك)</li>
+                            <li><code>file</code>: الملف المرفق</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="api-endpoint mb-0">
+                        <h5><span class="badge method-get">GET</span> /api/status</h5>
+                        <p>تحميل حالة جميع الأرقام المسجلة في السيرفر.</p>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- Add Instance Modal -->
+    <div id="addInstanceModal" class="modal">
+        <div class="modal-content glass-panel">
+            <div class="modal-header">
+                <h3>إضافة رقم جديد</h3>
+                <button class="close-btn" onclick="closeModal('addInstanceModal')"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>رقم الواتساب (مع رمز الدولة، مثال: 966500000000)</label>
+                    <input type="text" id="newPhoneNumber" placeholder="رقم الهاتف..." class="form-control" autocomplete="off">
+                </div>
+                
+                <div class="connection-methods mt-4">
+                    <h4>طريقة الربط</h4>
+                    <div class="method-cards flex-gap mt-2">
+                        <div class="method-card active" id="btnMethodQR" onclick="selectMethod('qr')">
+                            <i class="fas fa-qrcode"></i>
+                            <span>عبر QR Code</span>
+                        </div>
+                        <div class="method-card" id="btnMethodCode" onclick="selectMethod('code')">
+                            <i class="fas fa-hashtag"></i>
+                            <span>كود الاقتران (Pairing Code)</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeModal('addInstanceModal')">إلغاء</button>
+                <button class="btn btn-primary" onclick="startNewSession()">بدء الجلسة</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- QR/Code Scanning Modal -->
+    <div id="pairingModal" class="modal">
+        <div class="modal-content glass-panel text-center">
+            <div class="modal-header">
+                <h3>ربط واتساب</h3>
+                <button class="close-btn" onclick="closeModal('pairingModal')"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body py-4">
+                <h4 id="pairingPhoneDisplay" class="text-primary mb-2"></h4>
+                <p id="pairingInstructions" class="mb-4">افتح واتساب على هاتفك، اذهب إلى الأجهزة المرتبطة، ثم امسح الكود.</p>
+                
+                <!-- QR Wrapper -->
+                <div id="qrCodeWrapper" class="qr-wrapper">
+                    <div class="qr-skeleton" id="qrSkeleton">
+                        <div class="spinner"></div>
+                        <span>جاري جلب الرمز...</span>
+                    </div>
+                    <div id="qrcode" class="qrcode-container hidden"></div>
+                </div>
+
+                <!-- Code Wrapper -->
+                <div id="pairingCodeWrapper" class="pairing-code-wrapper hidden">
+                    <div class="pairing-skeleton" id="pairingSkeleton">
+                        <div class="spinner"></div>
+                        <span>جاري طلب الكود...</span>
+                    </div>
+                    <div id="actualPairingCode" class="pairing-code-display hidden">
+                        <!-- Code injected via JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Webhook Settings Modal -->
+    <div id="webhookModal" class="modal">
+        <div class="modal-content glass-panel">
+            <div class="modal-header">
+                <h3>إعدادات Webhook</h3>
+                <button class="close-btn" onclick="closeModal('webhookModal')"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="webhookPhone">
+                <div class="form-group">
+                    <label>رابط الـ Webhook الخاص بهذا الرقم</label>
+                    <input type="url" id="webhookUrlInput" placeholder="https://your-domain.com/webhook..." class="form-control" autocomplete="off">
+                    <small class="text-muted mt-2 d-block">سيقوم السيرفر بإرسال بيانات الرسائل والأحداث الواردة إلى هذا الرابط بصيغة POST JSON.</small>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeModal('webhookModal')">إلغاء</button>
+                <button class="btn btn-primary" onclick="saveWebhook()">حفظ الإعدادات</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirm Dialog Modal -->
+    <div id="confirmModal" class="modal">
+        <div class="modal-content glass-panel text-center" style="max-width: 400px;">
+            <div class="modal-header">
+                <h3 id="confirmTitle" class="text-danger">تأكيد الإجراء</h3>
+                <button class="close-btn" onclick="closeConfirmModal()"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body py-4">
+                <p id="confirmMessage" class="mb-4">هل أنت متأكد من هذا الإجراء؟</p>
+                <div class="flex-gap" style="justify-content: center;">
+                    <button class="btn btn-outline w-100" onclick="closeConfirmModal()">إلغاء</button>
+                    <button id="confirmActionBtn" class="btn w-100">تأكيد</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- QR Code Library for generating QR on UI -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <!-- Socket.IO Client -->
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
