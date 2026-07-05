@@ -265,12 +265,21 @@ async function connectToWhatsApp(phone, socketId = null) {
             console.log(`Reconnecting: ${shouldReconnect}, retry #${session._retryCount}`);
 
             if (shouldReconnect) {
-                // If we have no QR and session failed, auth files are likely stale
-                // Delete them immediately to force fresh QR generation instead of waiting 3 retries
+                // CRITICAL: a session that has already paired (creds.json carries a `me`
+                // identity) must NEVER have its auth deleted on a transient disconnect.
+                // Stream error 515 ('restart required') fires on every reconnect/redeploy,
+                // and the old logic deleted paired creds on the first such event — wiping
+                // live sessions on every deploy. Only reset auth for a never-paired (fresh
+                // QR) session that keeps failing; real logouts are handled in the else branch.
+                const authDir = path.join(__dirname, 'auth_info_baileys', phone);
+                let isPaired = false;
+                try {
+                    const creds = JSON.parse(fs.readFileSync(path.join(authDir, 'creds.json'), 'utf8'));
+                    isPaired = !!(creds && (creds.me?.id || creds.account));
+                } catch (e) { /* no creds.json yet → never paired */ }
                 const hasNoQr = !session.qrCodeData;
-                if (session._retryCount >= 3 || (hasNoQr && session._retryCount >= 1)) {
-                    console.log(`Retry #${session._retryCount} for ${phone} with no QR — deleting auth for fresh start`);
-                    const authDir = path.join(__dirname, 'auth_info_baileys', phone);
+                if (!isPaired && (session._retryCount >= 3 || (hasNoQr && session._retryCount >= 1))) {
+                    console.log(`Fresh pairing for ${phone} keeps failing (retry #${session._retryCount}) — resetting auth for a clean QR`);
                     if (fs.existsSync(authDir)) {
                         try {
                             fs.rmSync(authDir, { recursive: true, force: true });
