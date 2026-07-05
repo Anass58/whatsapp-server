@@ -1248,8 +1248,25 @@ app.get('/api/admin/employee-analysis', async (req, res) => {
             ORDER BY timestamp ASC;
         `, [phone, days]);
 
+        // Resolve a customer's real phone number:
+        //  - @s.whatsapp.net → the number IS the JID's user part
+        //  - @lid → WhatsApp hides the number, but Baileys persists a reverse map on disk:
+        //    auth_info_baileys/<phone>/lid-mapping-<lid>_reverse.json  →  "<phone-number>"
+        const resolveNumber = (remoteJid) => {
+            if (/@s\.whatsapp\.net$/.test(remoteJid)) return remoteJid.split('@')[0];
+            if (/@lid$/.test(remoteJid)) {
+                const lid = remoteJid.split('@')[0];
+                try {
+                    const f = path.join(__dirname, 'auth_info_baileys', phone, `lid-mapping-${lid}_reverse.json`);
+                    const pn = JSON.parse(fs.readFileSync(f, 'utf8'));
+                    if (pn && /^\d+$/.test(String(pn))) return String(pn);
+                } catch (e) { /* no mapping on disk → keep hidden */ }
+            }
+            return null;
+        };
+
         const pendingList = pending.rows.map(r => ({
-            number: /@s\.whatsapp\.net$/.test(r.remote_jid) ? r.remote_jid.split('@')[0] : null,
+            number: resolveNumber(r.remote_jid),
             name: r.push_name || null,
             lastMessage: (r.message_text || '').slice(0, 80),
             waitingMinutes: r.waiting_min,
