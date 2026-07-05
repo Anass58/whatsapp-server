@@ -13,8 +13,18 @@ const mime = require('mime-types');
 const axios = require('axios'); // Used for Webhooks
 const db = require('./db'); // External Postgres DB
 
-// Initialize external DB
-db.initDB();
+// Safety net: never let a stray rejection/exception take down the WhatsApp gateway.
+// A transient DB error previously surfaced as an unhandled rejection and triggered a
+// Coolify restart storm (42k+ restarts). Log and stay alive so the 5 sessions persist.
+process.on('unhandledRejection', (reason) => {
+    console.error('[unhandledRejection]', reason && reason.stack ? reason.stack : reason);
+});
+process.on('uncaughtException', (err) => {
+    console.error('[uncaughtException]', err && err.stack ? err.stack : err);
+});
+
+// Initialize external DB (self-retries on failure; never rejects)
+db.initDB().catch(err => console.error('[db] initDB unexpected error:', err));
 
 const app = express();
 const server = http.createServer(app);
@@ -66,7 +76,11 @@ app.use(express.static(PUBLIC_DIR));
 // Admin login endpoint
 app.post('/api/admin/login', (req, res) => {
     const { password } = req.body;
-    const adminPassword = process.env.ADMIN_PASSWORD || 'admin123';
+    const adminPassword = process.env.ADMIN_PASSWORD;
+    if (!adminPassword) {
+        console.error('ADMIN_PASSWORD env var not set — admin login is disabled until it is configured.');
+        return res.status(500).json({ success: false, error: 'server misconfigured' });
+    }
     if (password === adminPassword) {
         res.json({ success: true, token: 'evolution_admin_token_2026' });
     } else {

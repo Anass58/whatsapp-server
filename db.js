@@ -1,15 +1,36 @@
 require('dotenv').config();
 const { Pool } = require('pg');
 
+// DATABASE_URL is required — no hardcoded fallback (it would leak DB credentials in source).
+// If you previously relied on the internal-IP fallback to bypass Docker DNS (EAI_AGAIN),
+// set DATABASE_URL in whatsapp-server/.env to that IP-based connection string instead.
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString) {
+    // Missing required config is a real misconfiguration, not a transient error:
+    // fail fast with an actionable message instead of an unhandled throw/stack trace.
+    console.error('[FATAL] DATABASE_URL is not set. Configure it in the environment (Coolify → Environment Variables). Refusing to start.');
+    process.exit(1);
+}
+
 const pool = new Pool({
-    // Fallback to the raw internal IPv4 address to bypass Docker DNS (EAI_AGAIN) errors
-    connectionString: process.env.DATABASE_URL || "postgresql://postgres:qCkPiGs4XyDqChkvTThkqf7OCgfHiNVOye80gI8jgXsMpWxO5G8U0ohPT4zWlkOc@172.18.0.3:5432/postgres",
+    connectionString,
+    connectionTimeoutMillis: 10000, // fail a stalled connect in 10s instead of hanging ~2min on ETIMEDOUT
+    idleTimeoutMillis: 30000,
+    max: 10,
     // ssl: { rejectUnauthorized: false } // Disabled for Coolify's internal network to prevent connection rejection
 });
 
-const initDB = async () => {
-    const client = await pool.connect();
+// A pg Pool emits 'error' on idle backend clients (DB restarted, network blip, etc.).
+// With no listener, Node crashes the whole process — which is exactly how a transient
+// DB hiccup previously turned into a Coolify restart storm. Log and keep the gateway alive.
+pool.on('error', (err) => {
+    console.error('[db] idle client error (non-fatal):', err.message);
+});
+
+const initDB = async (attempt = 1) => {
+    let client;
     try {
+        client = await pool.connect();
         console.log('Initializing Database Schema...');
         
         // Instances table: Stores WhatsApp sessions and their webhook URLs
@@ -54,9 +75,13 @@ const initDB = async () => {
 
         console.log('Database Initialization Complete.');
     } catch (err) {
-        console.error('Error initializing database:', err);
+        // Never let a boot-time DB outage crash the process. Retry with capped backoff
+        // (2s, 4s, 8s, 16s, 32s → max 30s) until the DB becomes reachable.
+        const delay = Math.min(30000, 1000 * 2 ** Math.min(attempt, 5));
+        console.error(`[db] initDB attempt ${attempt} failed: ${err.message}. Retrying in ${Math.round(delay / 1000)}s...`);
+        setTimeout(() => initDB(attempt + 1), delay);
     } finally {
-        client.release();
+        if (client) client.release();
     }
 };
 
