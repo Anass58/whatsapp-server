@@ -1188,6 +1188,85 @@ app.get('/api/admin/message-stats', async (req, res) => {
     }
 });
 
+// --- Per-employee (per-number) WhatsApp analysis: response speed, replies, pending customers ---
+app.get('/api/admin/employee-analysis', async (req, res) => {
+    const phone = String(req.query.phone || '').replace(/\D/g, '');
+    let days = parseInt(req.query.days, 10);
+    if (!Number.isFinite(days) || days < 1 || days > 365) days = 7;
+    if (!phone) return res.status(400).json({ success: false, error: 'phone required' });
+
+    // Shared filter: this number's individual customer chats only (no groups/newsletters/self-chat)
+    const FILTER = `
+        instance_phone = $1
+        AND remote_jid NOT LIKE '%@g.us'
+        AND remote_jid NOT LIKE '%@newsletter'
+        AND remote_jid <> ($1 || '@s.whatsapp.net')
+        AND to_timestamp(timestamp/1000) >= now() - make_interval(days => $2::int)
+    `;
+    try {
+        const summary = await db.query(`
+            SELECT (COUNT(*) FILTER (WHERE NOT from_me))::int AS received,
+                   (COUNT(*) FILTER (WHERE from_me))::int AS sent,
+                   (COUNT(DISTINCT remote_jid))::int AS customers
+            FROM messages WHERE ${FILTER};
+        `, [phone, days]);
+
+        // Response speed: avg minutes from a customer's message to the next reply (within 12h)
+        const speed = await db.query(`
+            WITH ordered AS (
+                SELECT remote_jid, from_me, timestamp,
+                       LEAD(timestamp) OVER (PARTITION BY remote_jid ORDER BY timestamp) AS next_ts,
+                       LEAD(from_me)   OVER (PARTITION BY remote_jid ORDER BY timestamp) AS next_fm
+                FROM messages WHERE ${FILTER}
+            )
+            SELECT ROUND(AVG((next_ts - timestamp)/60000.0)::numeric, 1)::float AS avg_min,
+                   COUNT(*)::int AS samples
+            FROM ordered
+            WHERE NOT from_me AND next_fm AND next_ts IS NOT NULL
+              AND (next_ts - timestamp) <= 12*3600*1000;
+        `, [phone, days]);
+
+        // Pending customers: those whose most-recent message is inbound (not yet replied to)
+        const pending = await db.query(`
+            WITH last_per_jid AS (
+                SELECT DISTINCT ON (remote_jid) remote_jid, from_me, timestamp, push_name, message_text
+                FROM messages WHERE ${FILTER}
+                ORDER BY remote_jid, timestamp DESC
+            )
+            SELECT remote_jid, push_name, message_text, timestamp,
+                   ROUND((EXTRACT(EPOCH FROM now())*1000 - timestamp)/60000.0)::int AS waiting_min
+            FROM last_per_jid WHERE NOT from_me
+            ORDER BY timestamp ASC;
+        `, [phone, days]);
+
+        const pendingList = pending.rows.map(r => ({
+            number: /@s\.whatsapp\.net$/.test(r.remote_jid) ? r.remote_jid.split('@')[0] : null,
+            name: r.push_name || null,
+            lastMessage: (r.message_text || '').slice(0, 80),
+            waitingMinutes: r.waiting_min,
+        }));
+
+        const s = summary.rows[0] || {};
+        const sp = speed.rows[0] || {};
+        res.json({
+            success: true,
+            phone, days,
+            summary: {
+                received: s.received || 0,
+                sent: s.sent || 0,
+                customers: s.customers || 0,
+                pendingCount: pendingList.length,
+                avgResponseMinutes: (sp.avg_min === null || sp.avg_min === undefined) ? null : sp.avg_min,
+                replySamples: sp.samples || 0,
+            },
+            pending: pendingList,
+        });
+    } catch (e) {
+        console.error('employee-analysis error:', e.message);
+        res.status(500).json({ success: false, error: 'failed to analyze' });
+    }
+});
+
 // --- Get Chat List ---
 app.get('/api/chats', (req, res) => {
     const { phone } = req.query;
