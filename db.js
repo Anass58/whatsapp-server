@@ -73,6 +73,11 @@ const initDB = async (attempt = 1) => {
             );
         `);
 
+        // Speeds up the message-stats aggregation (per number, per day/time-window)
+        await client.query(`
+            CREATE INDEX IF NOT EXISTS idx_messages_instance_ts ON messages (instance_phone, timestamp);
+        `);
+
         console.log('Database Initialization Complete.');
     } catch (err) {
         // Never let a boot-time DB outage crash the process. Retry with capped backoff

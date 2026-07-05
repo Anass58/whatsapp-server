@@ -67,6 +67,74 @@ function showSection(sectionId) {
     
     document.getElementById(`section-${sectionId}`).classList.add('active');
     event.currentTarget.parentElement.classList.add('active');
+
+    if (sectionId === 'stats') loadMessageStats();
+}
+
+// Load Message Statistics (sent per day per number + distinct customers)
+async function loadMessageStats() {
+    const daysSel = document.getElementById('statsDays');
+    const days = daysSel ? daysSel.value : 14;
+    const loader = document.getElementById('statsLoader');
+    const summary = document.getElementById('statsSummary');
+    const tbody = document.querySelector('#statsTable tbody');
+    const emptyEl = document.getElementById('statsEmpty');
+    const tableEl = document.getElementById('statsTable');
+
+    loader.classList.remove('hidden');
+    summary.innerHTML = '';
+    tbody.innerHTML = '';
+    emptyEl.classList.add('hidden');
+    tableEl.classList.remove('hidden');
+
+    try {
+        const res = await fetch(`/api/admin/message-stats?days=${days}`);
+        const data = await res.json();
+        loader.classList.add('hidden');
+
+        if (!data.success) {
+            showToast('فشل تحميل الإحصائيات', 'error');
+            return;
+        }
+
+        // Per-number summary cards
+        data.perNumber.forEach(r => {
+            const card = document.createElement('div');
+            card.className = 'instance-card';
+            card.innerHTML = `
+                <div class="instance-header">
+                    <div class="instance-phone"><i class="fab fa-whatsapp"></i> <span dir="ltr">${r.phone}</span></div>
+                </div>
+                <div class="stats-metrics">
+                    <div class="metric"><span class="metric-value">${r.sent}</span><span class="metric-label">مُرسَلة</span></div>
+                    <div class="metric"><span class="metric-value">${r.customers}</span><span class="metric-label">عملاء</span></div>
+                    <div class="metric"><span class="metric-value">${r.received}</span><span class="metric-label">واردة</span></div>
+                </div>`;
+            summary.appendChild(card);
+        });
+
+        // Daily breakdown table
+        if (!data.daily || data.daily.length === 0) {
+            tableEl.classList.add('hidden');
+            emptyEl.classList.remove('hidden');
+            return;
+        }
+
+        data.daily.forEach(r => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td>${r.day}</td>
+                <td dir="ltr">${r.phone}</td>
+                <td class="stat-sent">${r.sent}</td>
+                <td class="stat-customers">${r.customers}</td>
+                <td class="text-muted">${r.received}</td>`;
+            tbody.appendChild(tr);
+        });
+
+    } catch (err) {
+        loader.classList.add('hidden');
+        showToast('خطأ في جلب الإحصائيات', 'error');
+    }
 }
 
 // Toast

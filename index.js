@@ -1150,6 +1150,44 @@ app.get('/api/status', (req, res) => {
     res.json(allSessions);
 });
 
+// --- Message stats: messages sent per day per number + distinct customers messaged ---
+app.get('/api/admin/message-stats', async (req, res) => {
+    let days = parseInt(req.query.days, 10);
+    if (!Number.isFinite(days) || days < 1 || days > 365) days = 14;
+    const TZ = 'Asia/Riyadh';
+    try {
+        // Totals per connected number over the selected window
+        const perNumber = await db.query(`
+            SELECT instance_phone AS phone,
+                   (COUNT(*) FILTER (WHERE from_me))::int AS sent,
+                   (COUNT(DISTINCT remote_jid) FILTER (WHERE from_me AND remote_jid NOT LIKE '%@g.us'))::int AS customers,
+                   (COUNT(*) FILTER (WHERE NOT from_me))::int AS received
+            FROM messages
+            WHERE to_timestamp(timestamp/1000) >= now() - make_interval(days => $1::int)
+            GROUP BY instance_phone
+            ORDER BY sent DESC;
+        `, [days]);
+
+        // Daily breakdown (day in Riyadh local time) per number
+        const daily = await db.query(`
+            SELECT instance_phone AS phone,
+                   to_char(to_timestamp(timestamp/1000) AT TIME ZONE $2, 'YYYY-MM-DD') AS day,
+                   (COUNT(*) FILTER (WHERE from_me))::int AS sent,
+                   (COUNT(DISTINCT remote_jid) FILTER (WHERE from_me AND remote_jid NOT LIKE '%@g.us'))::int AS customers,
+                   (COUNT(*) FILTER (WHERE NOT from_me))::int AS received
+            FROM messages
+            WHERE to_timestamp(timestamp/1000) >= now() - make_interval(days => $1::int)
+            GROUP BY instance_phone, day
+            ORDER BY day DESC, sent DESC;
+        `, [days, TZ]);
+
+        res.json({ success: true, days, timezone: TZ, perNumber: perNumber.rows, daily: daily.rows });
+    } catch (e) {
+        console.error('message-stats error:', e.message);
+        res.status(500).json({ success: false, error: 'failed to load stats' });
+    }
+});
+
 // --- Get Chat List ---
 app.get('/api/chats', (req, res) => {
     const { phone } = req.query;

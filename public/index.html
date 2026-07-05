@@ -55,6 +55,7 @@
             </div>
             <ul class="nav-links">
                 <li class="active"><a href="#" onclick="showSection('instances')"><i class="fas fa-server"></i> الجلسات (Instances)</a></li>
+                <li><a href="#" onclick="showSection('stats')"><i class="fas fa-chart-line"></i> إحصائيات الرسائل</a></li>
                 <li><a href="#" onclick="showSection('api_docs')"><i class="fas fa-code"></i> API & Endpoints</a></li>
             </ul>
             <div class="sidebar-footer">
@@ -142,6 +143,56 @@
                     <div class="api-endpoint mb-0">
                         <h5><span class="badge method-get">GET</span> /api/status</h5>
                         <p>تحميل حالة جميع الأرقام المسجلة في السيرفر.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div id="section-stats" class="content-section">
+                <div class="section-header">
+                    <div class="header-info">
+                        <h3>إحصائيات الرسائل</h3>
+                        <p>عدد الرسائل المُرسَلة يوميًا لكل رقم، وعدد العملاء الذين تمت مراسلتهم.</p>
+                    </div>
+                    <div class="flex-gap">
+                        <select id="statsDays" class="form-control" style="width:auto" onchange="loadMessageStats()">
+                            <option value="1">اليوم</option>
+                            <option value="7">آخر 7 أيام</option>
+                            <option value="14" selected>آخر 14 يوم</option>
+                            <option value="30">آخر 30 يوم</option>
+                            <option value="90">آخر 90 يوم</option>
+                        </select>
+                        <button class="btn btn-outline" onclick="loadMessageStats()"><i class="fas fa-sync"></i> تحديث</button>
+                    </div>
+                </div>
+
+                <div id="statsLoader" class="loader-container hidden">
+                    <div class="spinner"></div>
+                    <p>جاري تحميل الإحصائيات...</p>
+                </div>
+
+                <!-- Per-number summary cards -->
+                <div id="statsSummary" class="instances-grid"></div>
+
+                <!-- Daily breakdown -->
+                <div class="glass-panel p-4 mt-4">
+                    <h5 class="mb-3">التفصيل اليومي (بتوقيت الرياض)</h5>
+                    <div style="overflow-x:auto">
+                        <table class="stats-table" id="statsTable">
+                            <thead>
+                                <tr>
+                                    <th>اليوم</th>
+                                    <th>الرقم</th>
+                                    <th><i class="fas fa-paper-plane"></i> رسائل مُرسَلة</th>
+                                    <th><i class="fas fa-users"></i> عملاء تمت مراسلتهم</th>
+                                    <th><i class="fas fa-inbox"></i> واردة</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                    <div id="statsEmpty" class="empty-state hidden text-center p-4">
+                        <i class="fas fa-inbox fa-2x mb-2 text-muted"></i>
+                        <p class="text-muted">لا توجد رسائل في هذه الفترة.</p>
                     </div>
                 </div>
             </div>
